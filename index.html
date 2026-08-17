@@ -42,6 +42,49 @@
     </div>
   </div>
 
+  <!-- DASHBOARD -->
+  <section class="dashboard-card card" id="dashboardCard">
+    <div class="dashboard-head">
+      <div>
+        <h2>Dashboard</h2>
+        <p id="dashboardScope">Weekly and monthly overview for the selected report month</p>
+      </div>
+      <div class="dashboard-toggles" role="group" aria-label="Dashboard period">
+        <button type="button" class="dash-toggle active" data-dash-view="month" id="dashMonthBtn">Monthly</button>
+        <button type="button" class="dash-toggle" data-dash-view="week" id="dashWeekBtn">Weekly</button>
+      </div>
+    </div>
+    <div class="dashboard-stats">
+      <div class="dash-stat">
+        <span class="dash-stat-label" id="dashStat1Label">Received</span>
+        <strong id="dashReceived">₦0.00</strong>
+      </div>
+      <div class="dash-stat">
+        <span class="dash-stat-label" id="dashStat2Label">Disbursed</span>
+        <strong id="dashDisbursed">₦0.00</strong>
+      </div>
+      <div class="dash-stat">
+        <span class="dash-stat-label" id="dashStat3Label">Net flow</span>
+        <strong id="dashNet">₦0.00</strong>
+      </div>
+      <div class="dash-stat">
+        <span class="dash-stat-label" id="dashStat4Label">Transactions</span>
+        <strong id="dashCount">0</strong>
+      </div>
+    </div>
+    <div class="dashboard-charts">
+      <div class="chart-panel">
+        <h3 id="pieChartTitle">Received vs disbursed</h3>
+        <div class="chart-frame" id="pieChart"></div>
+        <div class="chart-legend" id="pieLegend"></div>
+      </div>
+      <div class="chart-panel">
+        <h3 id="barChartTitle">Weekly disbursement</h3>
+        <div class="chart-frame" id="barChart"></div>
+      </div>
+    </div>
+  </section>
+
   <!-- ENTRY FORM -->
   <div class="form-card card">
     <div class="card-title">
@@ -101,6 +144,15 @@
 
   <!-- LEDGER -->
   <div class="ledger-card card">
+    <div class="month-nav">
+      <button class="ghost" id="prevMonthBtn" type="button">‹ Previous month</button>
+      <div class="month-nav-current">
+        <strong id="monthLabel">August 2026</strong>
+        <span id="monthRecordHint">This month’s records</span>
+      </div>
+      <button class="ghost" id="nextMonthBtn" type="button">Next month ›</button>
+    </div>
+    <div class="month-chips" id="monthChips"></div>
     <div class="ledger-head">
       <h2>Report entries</h2>
       <div class="ledger-tools">
@@ -116,7 +168,7 @@
       </div>
     </div>
     <p class="status-message" id="statusMessage" aria-live="polite"></p>
-    <div id="emptyState" class="empty-state">No entries yet — fill the form above and add your first transaction.</div>
+    <div id="emptyState" class="empty-state">No entries for this month yet — add a transaction, or use Previous month to open earlier records.</div>
     <div id="entryList"></div>
     <div class="summary" id="summary" style="display:none;">
       <div class="cell">

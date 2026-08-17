@@ -9,6 +9,7 @@
   const reportTitle = 'FuelLedger';
   const defaultLogo = 'image/web/icon.svg';
   let editingIndex = null;
+  let dashboardView = 'month';
 
   function amountFrom(value){
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -92,6 +93,18 @@
     return reportMonthInput.value || new Date().toISOString().slice(0, 7);
   }
 
+  function monthLabelText(month){
+    const date = new Date(`${month}-01T00:00:00`);
+    if (Number.isNaN(date.getTime())) return month;
+    return date.toLocaleDateString('en-NG', { month:'long', year:'numeric' });
+  }
+
+  function shiftMonth(month, delta){
+    const [year, mon] = month.split('-').map(Number);
+    const date = new Date(year, mon - 1 + delta, 1);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  }
+
   function emptyLedger(){
     return { entries: [], preparedBy: '', reportDate: '', openingBalance: 0 };
   }
@@ -128,7 +141,38 @@
     document.getElementById('f-date').value = `${month}-01`;
     formTitle.textContent = 'Add a transaction';
     saveEntryBtn.textContent = '+ Add to report';
+    renderMonthNav();
     renderList();
+  }
+
+  function renderMonthNav(){
+    const month = currentMonth();
+    const label = document.getElementById('monthLabel');
+    const hint = document.getElementById('monthRecordHint');
+    const chips = document.getElementById('monthChips');
+    if (label) label.textContent = monthLabelText(month);
+    const count = entries.length;
+    if (hint) hint.textContent = count
+      ? `${count} record${count === 1 ? '' : 's'} this month`
+      : 'No records this month yet';
+    const savedMonths = Object.keys(monthlyLedgers)
+      .filter(key => Array.isArray(monthlyLedgers[key]?.entries) && monthlyLedgers[key].entries.length)
+      .sort()
+      .reverse();
+    if (chips) {
+      chips.innerHTML = savedMonths.map(key =>
+        `<button type="button" class="month-chip${key === month ? ' active' : ''}" data-month="${key}">${monthLabelText(key)}</button>`
+      ).join('');
+    }
+  }
+
+  function switchToMonth(month){
+    if (!month) return;
+    saveCurrentMonth();
+    reportMonthInput.value = month;
+    localStorage.setItem(SELECTED_MONTH_KEY, month);
+    loadMonth(month);
+    showStatus(`Showing ${monthLabelText(month)}.`);
   }
 
   function initialiseMonthlyLedgers(){
@@ -165,9 +209,19 @@
   });
   reportMonthInput.addEventListener('change', () => {
     if (!reportMonthInput.value) return;
-    localStorage.setItem(SELECTED_MONTH_KEY, reportMonthInput.value);
-    loadMonth(reportMonthInput.value);
-    showStatus(`Showing ${new Date(`${reportMonthInput.value}-01T00:00:00`).toLocaleDateString('en-NG', { month:'long', year:'numeric' })}.`);
+    switchToMonth(reportMonthInput.value);
+  });
+  document.getElementById('prevMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(currentMonth(), -1)));
+  document.getElementById('nextMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(currentMonth(), 1)));
+  document.getElementById('monthChips').addEventListener('click', event => {
+    const chip = event.target.closest('[data-month]');
+    if (chip) switchToMonth(chip.dataset.month);
+  });
+  document.querySelectorAll('.dash-toggle').forEach(button => {
+    button.addEventListener('click', () => {
+      dashboardView = button.dataset.dashView === 'week' ? 'week' : 'month';
+      renderDashboard();
+    });
   });
 
   function openingBalance(){
@@ -215,12 +269,203 @@
     return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
   }
 
+  function weekOfMonth(isoDate){
+    const day = Number(String(isoDate || '').slice(8, 10));
+    if (!day) return 1;
+    return Math.min(5, Math.ceil(day / 7));
+  }
+
+  function entriesForMonth(month){
+    const ledger = monthlyLedgers[month];
+    if (ledger && Array.isArray(ledger.entries)) return ledger.entries.map(normalizeEntry);
+    return month === currentMonth() ? entries.slice() : [];
+  }
+
+  function summarizeEntries(list){
+    return list.reduce((acc, entry) => {
+      acc.received += entry.received;
+      acc.disbursed += entry.disbursed;
+      acc.count += 1;
+      return acc;
+    }, { received: 0, disbursed: 0, count: 0 });
+  }
+
+  function polarToCartesian(cx, cy, radius, angleInDegrees){
+    const angleInRadians = (angleInDegrees - 90) * Math.PI / 180;
+    return {
+      x: cx + (radius * Math.cos(angleInRadians)),
+      y: cy + (radius * Math.sin(angleInRadians))
+    };
+  }
+
+  function describeArc(cx, cy, radius, startAngle, endAngle){
+    const start = polarToCartesian(cx, cy, radius, endAngle);
+    const end = polarToCartesian(cx, cy, radius, startAngle);
+    const largeArcFlag = endAngle - startAngle <= 180 ? '0' : '1';
+    return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y} L ${cx} ${cy} Z`;
+  }
+
+  function renderPieChart(target, slices){
+    const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+    if (!total) {
+      target.innerHTML = '<div class="chart-empty">No amounts to chart yet</div>';
+      return;
+    }
+    let angle = 0;
+    const paths = slices.filter(slice => slice.value > 0).map(slice => {
+      const sweep = (slice.value / total) * 360;
+      const start = angle;
+      const end = angle + sweep;
+      angle = end;
+      if (sweep >= 359.99) {
+        return `<circle cx="110" cy="110" r="78" fill="${slice.color}"></circle>`;
+      }
+      return `<path d="${describeArc(110, 110, 78, start, end)}" fill="${slice.color}"></path>`;
+    }).join('');
+    target.innerHTML = `<svg viewBox="0 0 220 220" role="img" aria-label="Pie chart">${paths}<circle cx="110" cy="110" r="42" fill="#fff"></circle></svg>`;
+  }
+
+  function renderBarChart(target, bars){
+    const maxValue = Math.max(...bars.map(bar => Math.max(bar.received || 0, bar.disbursed || 0)), 0);
+    if (!maxValue) {
+      target.innerHTML = '<div class="chart-empty">No weekly activity yet</div>';
+      return;
+    }
+    const width = 340;
+    const height = 210;
+    const padL = 36;
+    const padB = 34;
+    const padT = 16;
+    const chartW = width - padL - 12;
+    const chartH = height - padB - padT;
+    const groupWidth = chartW / bars.length;
+    const barWidth = Math.max(8, groupWidth * 0.28);
+    const grid = [0.25, 0.5, 0.75, 1].map(part => {
+      const y = padT + chartH - (chartH * part);
+      return `<line x1="${padL}" y1="${y}" x2="${width - 12}" y2="${y}" stroke="#e6eef1" stroke-width="1"></line>`;
+    }).join('');
+    const groups = bars.map((bar, index) => {
+      const x0 = padL + index * groupWidth + groupWidth * 0.18;
+      const receivedH = (bar.received / maxValue) * chartH;
+      const disbursedH = (bar.disbursed / maxValue) * chartH;
+      const labelX = padL + index * groupWidth + groupWidth / 2;
+      return `
+        <g>
+          <rect x="${x0}" y="${padT + chartH - receivedH}" width="${barWidth}" height="${receivedH}" fill="#1c7a4d" rx="2"></rect>
+          <rect x="${x0 + barWidth + 4}" y="${padT + chartH - disbursedH}" width="${barWidth}" height="${disbursedH}" fill="#a3372c" rx="2"></rect>
+          <text x="${labelX}" y="${height - 12}" text-anchor="middle" font-size="11" fill="#5b6b7a">${escapeHtml(bar.label)}</text>
+        </g>`;
+    }).join('');
+    target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Bar chart">
+      ${grid}
+      <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + chartH}" stroke="#dbe2e8"></line>
+      <line x1="${padL}" y1="${padT + chartH}" x2="${width - 12}" y2="${padT + chartH}" stroke="#dbe2e8"></line>
+      ${groups}
+    </svg>`;
+  }
+
+  function allSavedEntries(){
+    const map = new Map();
+    Object.keys(monthlyLedgers).forEach(month => {
+      const list = Array.isArray(monthlyLedgers[month]?.entries) ? monthlyLedgers[month].entries : [];
+      list.forEach(entry => map.set(`${entry.date}|${entry.createdAt}|${entry.desc}|${entry.receipt}`, normalizeEntry(entry)));
+    });
+    entries.forEach(entry => map.set(`${entry.date}|${entry.createdAt}|${entry.desc}|${entry.receipt}`, normalizeEntry(entry)));
+    return Array.from(map.values());
+  }
+
+  function renderDashboard(){
+    const month = currentMonth();
+    const monthEntries = entriesForMonth(month);
+    const scope = document.getElementById('dashboardScope');
+    const pieTitle = document.getElementById('pieChartTitle');
+    const barTitle = document.getElementById('barChartTitle');
+    const pieChart = document.getElementById('pieChart');
+    const barChart = document.getElementById('barChart');
+    const pieLegend = document.getElementById('pieLegend');
+    if (!pieChart || !barChart) return;
+
+    document.querySelectorAll('.dash-toggle').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.dashView === dashboardView);
+    });
+
+    if (dashboardView === 'week') {
+      const today = new Date();
+      const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      const end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      const startIso = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
+      const endIso = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
+      const weekEntries = allSavedEntries().filter(entry => entry.date >= startIso && entry.date <= endIso);
+      const totals = summarizeEntries(weekEntries);
+      const dayBars = Array.from({ length: 7 }, (_, index) => {
+        const day = new Date(start);
+        day.setDate(start.getDate() + index);
+        const iso = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+        const dayTotals = summarizeEntries(weekEntries.filter(entry => entry.date === iso));
+        return {
+          label: day.toLocaleDateString('en-GB', { weekday: 'short' }),
+          received: dayTotals.received,
+          disbursed: dayTotals.disbursed
+        };
+      });
+      if (scope) scope.textContent = `This week (${formatDate(startIso)} – ${formatDate(endIso)})`;
+      if (pieTitle) pieTitle.textContent = 'This week: received vs disbursed';
+      if (barTitle) barTitle.textContent = 'Daily activity this week';
+      document.getElementById('dashReceived').textContent = nairaFmt(totals.received);
+      document.getElementById('dashDisbursed').textContent = nairaFmt(totals.disbursed);
+      const net = totals.received - totals.disbursed;
+      const netEl = document.getElementById('dashNet');
+      netEl.textContent = nairaFmt(net);
+      netEl.classList.toggle('negative', net < 0);
+      document.getElementById('dashCount').textContent = String(totals.count);
+      renderPieChart(pieChart, [
+        { label: 'Received', value: totals.received, color: '#1c7a4d' },
+        { label: 'Disbursed', value: totals.disbursed, color: '#a3372c' }
+      ]);
+      pieLegend.innerHTML = `
+        <span><i class="swatch" style="background:#1c7a4d"></i>Received ${nairaFmt(totals.received)}</span>
+        <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>`;
+      renderBarChart(barChart, dayBars);
+      return;
+    }
+
+    const totals = summarizeEntries(monthEntries);
+    const weekBars = [1, 2, 3, 4, 5].map(week => {
+      const weekTotals = summarizeEntries(monthEntries.filter(entry => weekOfMonth(entry.date) === week));
+      return { label: `W${week}`, received: weekTotals.received, disbursed: weekTotals.disbursed };
+    });
+    if (scope) scope.textContent = `Monthly overview for ${monthLabelText(month)}`;
+    if (pieTitle) pieTitle.textContent = 'This month: received vs disbursed';
+    if (barTitle) barTitle.textContent = 'Weekly received & disbursed';
+    document.getElementById('dashReceived').textContent = nairaFmt(totals.received);
+    document.getElementById('dashDisbursed').textContent = nairaFmt(totals.disbursed);
+    const net = totals.received - totals.disbursed;
+    const netEl = document.getElementById('dashNet');
+    netEl.textContent = nairaFmt(net);
+    netEl.classList.toggle('negative', net < 0);
+    document.getElementById('dashCount').textContent = String(totals.count);
+    renderPieChart(pieChart, [
+      { label: 'Received', value: totals.received, color: '#1c7a4d' },
+      { label: 'Disbursed', value: totals.disbursed, color: '#a3372c' }
+    ]);
+    pieLegend.innerHTML = `
+      <span><i class="swatch" style="background:#1c7a4d"></i>Received ${nairaFmt(totals.received)}</span>
+      <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>
+      <span><i class="swatch" style="background:#1c7a4d"></i>Bar: received</span>
+      <span><i class="swatch" style="background:#a3372c"></i>Bar: disbursed</span>`;
+    renderBarChart(barChart, weekBars);
+  }
+
   function renderList(){
     entryList.innerHTML = '';
     if (entries.length === 0){
       emptyState.style.display = 'block';
       summary.style.display = 'none';
       entryBadge.textContent = 'Entry #1';
+      renderMonthNav();
+      renderDashboard();
       updatePreview();
       return;
     }
@@ -268,6 +513,8 @@
     const balEl = document.getElementById('sumBalance');
     balEl.textContent = nairaFmt(running);
     entryBadge.textContent = editingIndex === null ? `Entry #${entries.length + 1}` : `Editing entry #${editingIndex + 1}`;
+    renderMonthNav();
+    renderDashboard();
     updatePreview();
   }
 
@@ -403,9 +650,10 @@
         <header class="report-heading">
           <div class="report-brand">
             <img src="${defaultLogo}" alt="">
-            <div><h1>${reportTitle}</h1><p>Vehicle fuel disbursement &amp; running balance report</p></div>
+            <div><h1>${reportTitle}</h1><p>${escapeHtml(monthLabelText(currentMonth()))} fuel disbursement &amp; running balance report</p></div>
           </div>
           <dl class="report-meta">
+            <dt>Report month</dt><dd>${escapeHtml(monthLabelText(currentMonth()))}</dd>
             <dt>Prepared by</dt><dd>${escapeHtml(preparedBy)}</dd>
             <dt>Report date</dt><dd>${escapeHtml(formatDate(reportDate) || '—')}</dd>
             <dt>Opening balance</dt><dd>${nairaFmt(openingBalance())}</dd>
