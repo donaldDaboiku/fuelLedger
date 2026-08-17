@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">FuelLedger</title>
+  <rect width="512" height="512" rx="96" fill="#0f5b78"/>
+  <path d="M124 126h182c31 0 56 25 56 56v48h26c20 0 36 16 36 36v118c0 20-16 36-36 36h-38v-42h32V272h-20v120c0 25-21 46-46 46H124c-20 0-36-16-36-36V162c0-20 16-36 36-36Zm20 48v216h172V174H144Zm36 42h100v42H180v-42Zm0 76h100v42H180v-42Z" fill="#fff"/>
+  <circle cx="230" cy="348" r="16" fill="#71d1ad"/>
+</svg>

@@ -1,0 +1,12 @@
+{
+  "name": "FuelLedger",
+  "short_name": "FuelLedger",
+  "description": "Offline fuel disbursement and running balance ledger.",
+  "start_url": "./funds_retirement_report_form.html",
+  "display": "standalone",
+  "background_color": "#eef1f3",
+  "theme_color": "#0f5b78",
+  "icons": [
+    { "src": "image/web/icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" }
+  ]
+}

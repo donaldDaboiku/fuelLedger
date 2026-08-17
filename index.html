@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0f5b78">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="image/web/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="image/web/icon.svg">
+<link rel="stylesheet" href="fuelledger.css">
+<title>FuelLedger</title>
+</head>
+<body>
+
+<div class="page">
+  <div class="letterhead card">
+    <div class="brand-title">
+      <img class="header-logo" src="image/web/icon.svg" alt="FuelLedger logo">
+      <h1>FuelLedger</h1>
+      <div class="sub">Vehicle fuel disbursement &amp; running balance ledger</div>
+    </div>
+    <div class="meta-block">
+      <div class="meta-field">
+        <label for="preparedBy">Prepared by</label>
+        <input type="text" id="preparedBy" placeholder="Full name">
+      </div>
+      <div class="meta-field">
+        <label for="reportDate">Report date</label>
+        <input type="date" id="reportDate">
+      </div>
+      <div class="meta-field">
+        <label for="openingBalance">Opening balance (₦)</label>
+        <input type="number" id="openingBalance" min="0" step="0.01" value="0" placeholder="0.00">
+      </div>
+    </div>
+  </div>
+
+  <!-- ENTRY FORM -->
+  <div class="form-card card">
+    <div class="card-title">
+      <h2 id="formTitle">Add a transaction</h2>
+      <span class="badge" id="entryBadge">Entry #1</span>
+    </div>
+    <form id="entryForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="f-date">Trans. date <span class="req">*</span></label>
+          <input type="date" id="f-date" required>
+        </div>
+        <div class="field">
+          <label for="f-receipt">Receipt / Invoice No.</label>
+          <input type="text" id="f-receipt" placeholder="e.g. 17669">
+        </div>
+        <div class="field">
+          <label for="f-desc">Description</label>
+          <input type="text" id="f-desc" placeholder="e.g. Diesel collected">
+        </div>
+        <div class="field">
+          <label for="f-vehicle">Vehicle No.</label>
+          <input type="text" id="f-vehicle" placeholder="e.g. ABC-123XY">
+        </div>
+        <div class="field">
+          <label for="f-requested">Requested by</label>
+          <input type="text" id="f-requested" placeholder="Name">
+        </div>
+        <div class="field">
+          <label for="f-from">Received from</label>
+          <input type="text" id="f-from" placeholder="Source">
+        </div>
+        <div class="field">
+          <label for="f-to">Paid to</label>
+          <input type="text" id="f-to" placeholder="Payee">
+        </div>
+        <div class="field money">
+          <label for="f-received">Amount received (₦)</label>
+          <input type="number" id="f-received" min="0" step="0.01" placeholder="0.00">
+        </div>
+        <div class="field money">
+          <label for="f-disbursed">Amount disbursed (₦)</label>
+          <input type="number" id="f-disbursed" min="0" step="0.01" placeholder="0.00">
+        </div>
+      </div>
+      <div class="form-actions">
+        <div class="preview-balance">
+          Projected closing balance: <strong id="previewBal">₦0.00</strong>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="ghost" id="clearFormBtn">Clear</button>
+          <button type="submit" id="saveEntryBtn">+ Add to report</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <!-- LEDGER -->
+  <div class="ledger-card card">
+    <div class="ledger-head">
+      <h2>Report entries</h2>
+      <div class="ledger-tools">
+        <button class="secondary" id="exportCsvBtn" type="button">Export CSV</button>
+        <button class="secondary" id="exportExcelBtn" type="button">Export Excel</button>
+        <button class="secondary" id="exportBackupBtn" type="button">Export backup</button>
+        <button class="secondary" id="importBackupBtn" type="button">Import backup</button>
+        <button class="ghost" id="clearAllBtn" type="button">Clear all</button>
+        <button class="secondary" id="printBtn" type="button">Print / Save PDF</button>
+        <input class="visually-hidden" id="importBackupInput" type="file" accept="application/json,.json">
+      </div>
+    </div>
+    <p class="status-message" id="statusMessage" aria-live="polite"></p>
+    <div id="emptyState" class="empty-state">No entries yet — fill the form above and add your first transaction.</div>
+    <div id="entryList"></div>
+    <div class="summary" id="summary" style="display:none;">
+      <div class="cell">
+        <div class="lbl">Total received</div>
+        <div class="val" id="sumReceived">₦0.00</div>
+      </div>
+      <div class="cell">
+        <div class="lbl">Total disbursed</div>
+        <div class="val" id="sumDisbursed">₦0.00</div>
+      </div>
+      <div class="cell">
+        <div class="lbl">Closing balance</div>
+        <div class="val" id="sumBalance">₦0.00</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-strip">
+    <span>Data is saved locally on this device. Export a backup before clearing browser data.</span>
+    <span>© gitsystemng</span>
+    <span id="genStamp"></span>
+  </div>
+</div>
+
+<section class="print-report" id="printReport" aria-hidden="true"></section>
+
+<dialog class="print-preview-modal" id="printPreviewModal" aria-labelledby="printPreviewTitle">
+  <div class="print-preview-header">
+    <h2 id="printPreviewTitle">Print preview</h2>
+    <div class="print-preview-actions">
+      <button class="ghost" id="closePrintPreviewBtn" type="button">Cancel</button>
+      <button id="confirmPrintBtn" type="button">Print</button>
+    </div>
+  </div>
+  <div class="print-preview-content" id="printPreviewContent"></div>
+</dialog>
+
+<script src="fuelledger.js"></script>
+</body>
+</html>
