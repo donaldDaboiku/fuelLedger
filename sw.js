@@ -1,4 +1,4 @@
-const CACHE_NAME = 'fuelledger-v10';
+const CACHE_NAME = 'fuelledger-v11';
 const APP_SHELL = [
   './index.html',
   './fuelledger.css',

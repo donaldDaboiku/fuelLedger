@@ -10,6 +10,7 @@
   const defaultLogo = 'image/web/icon.svg';
   let editingIndex = null;
   let dashboardView = 'month';
+  let activeMonth = new Date().toISOString().slice(0, 7);
 
   function amountFrom(value){
     if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
@@ -90,7 +91,7 @@
   let printTrigger = null;
 
   function currentMonth(){
-    return reportMonthInput.value || new Date().toISOString().slice(0, 7);
+    return activeMonth || reportMonthInput.value || new Date().toISOString().slice(0, 7);
   }
 
   function monthLabelText(month){
@@ -109,14 +110,20 @@
     return { entries: [], preparedBy: '', reportDate: '', openingBalance: 0 };
   }
 
+  function monthFromDate(isoDate, fallback = currentMonth()){
+    const month = String(isoDate || '').slice(0, 7);
+    return /^\d{4}-\d{2}$/.test(month) ? month : fallback;
+  }
+
   function sortEntries(){
     entries.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
   }
 
-  function saveCurrentMonth(){
+  function saveMonth(month){
+    if (!month) return;
     sortEntries();
-    monthlyLedgers[currentMonth()] = {
-      entries,
+    monthlyLedgers[month] = {
+      entries: entries.map(normalizeEntry),
       preparedBy: document.getElementById('preparedBy').value,
       reportDate: document.getElementById('reportDate').value,
       openingBalance: openingBalance()
@@ -124,10 +131,23 @@
     localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
   }
 
+  function saveCurrentMonth(){
+    saveMonth(activeMonth);
+  }
+
   function saveEntries(){ saveCurrentMonth(); }
 
   function saveMeta(){
     saveCurrentMonth();
+  }
+
+  function formHasUnsavedDraft(){
+    if (editingIndex !== null) return true;
+    const fields = ['f-receipt', 'f-desc', 'f-vehicle', 'f-requested', 'f-from', 'f-to'];
+    if (fields.some(id => document.getElementById(id).value.trim())) return true;
+    if (amountFrom(document.getElementById('f-received').value) > 0 || amountFrom(document.getElementById('f-disbursed').value) > 0) return true;
+    const dateValue = document.getElementById('f-date').value;
+    return Boolean(dateValue && dateValue !== `${activeMonth}-01` && dateValue.slice(0, 7) !== activeMonth);
   }
 
   function loadMonth(month){
@@ -168,35 +188,103 @@
 
   function switchToMonth(month){
     if (!month) return;
-    saveCurrentMonth();
+    if (month === activeMonth) {
+      reportMonthInput.value = activeMonth;
+      return;
+    }
+    if (formHasUnsavedDraft() && !window.confirm('You have unsaved form changes or an unfinished edit. Switch month and discard them?')) {
+      reportMonthInput.value = activeMonth;
+      return;
+    }
+    saveMonth(activeMonth);
+    activeMonth = month;
     reportMonthInput.value = month;
     localStorage.setItem(SELECTED_MONTH_KEY, month);
     loadMonth(month);
     showStatus(`Showing ${monthLabelText(month)}.`);
   }
 
+  function redistributeLedgersByEntryDate(source){
+    const next = {};
+    Object.entries(source || {}).forEach(([bucketMonth, ledger]) => {
+      if (!ledger || typeof ledger !== 'object') return;
+      const list = Array.isArray(ledger.entries) ? ledger.entries : [];
+      if (!next[bucketMonth]) {
+        next[bucketMonth] = {
+          ...emptyLedger(),
+          preparedBy: ledger.preparedBy || '',
+          reportDate: ledger.reportDate || '',
+          openingBalance: amountFrom(ledger.openingBalance)
+        };
+      } else {
+        if (!next[bucketMonth].preparedBy && ledger.preparedBy) next[bucketMonth].preparedBy = ledger.preparedBy;
+        if (!next[bucketMonth].reportDate && ledger.reportDate) next[bucketMonth].reportDate = ledger.reportDate;
+        if (!next[bucketMonth].openingBalance && amountFrom(ledger.openingBalance)) {
+          next[bucketMonth].openingBalance = amountFrom(ledger.openingBalance);
+        }
+      }
+      list.forEach(raw => {
+        const entry = normalizeEntry(raw);
+        const targetMonth = monthFromDate(entry.date, bucketMonth);
+        if (!next[targetMonth]) next[targetMonth] = emptyLedger();
+        next[targetMonth].entries.push(entry);
+      });
+    });
+    Object.values(next).forEach(ledger => {
+      ledger.entries.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+    });
+    return next;
+  }
+
+  function migrateLegacyEntries(){
+    const legacyEntries = JSON.parse(localStorage.getItem(LEGACY_ENTRIES_KEY) || '[]');
+    if (!Array.isArray(legacyEntries) || !legacyEntries.length) return false;
+    const legacyMeta = JSON.parse(localStorage.getItem(LEGACY_META_KEY) || '{}');
+    const fallbackMonth = monthFromDate(legacyMeta.reportDate, activeMonth);
+    legacyEntries.map(normalizeEntry).forEach(entry => {
+      const targetMonth = monthFromDate(entry.date, fallbackMonth);
+      if (!monthlyLedgers[targetMonth]) monthlyLedgers[targetMonth] = emptyLedger();
+      monthlyLedgers[targetMonth].entries.push(entry);
+    });
+    if (!monthlyLedgers[fallbackMonth]) monthlyLedgers[fallbackMonth] = emptyLedger();
+    monthlyLedgers[fallbackMonth].preparedBy = legacyMeta.preparedBy || monthlyLedgers[fallbackMonth].preparedBy || '';
+    monthlyLedgers[fallbackMonth].reportDate = legacyMeta.reportDate || monthlyLedgers[fallbackMonth].reportDate || `${fallbackMonth}-01`;
+    monthlyLedgers[fallbackMonth].openingBalance = amountFrom(localStorage.getItem(LEGACY_OPENING_BALANCE_KEY));
+    Object.values(monthlyLedgers).forEach(ledger => {
+      ledger.entries.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+    });
+    return true;
+  }
+
   function initialiseMonthlyLedgers(){
     const todayMonth = new Date().toISOString().slice(0, 7);
-    reportMonthInput.value = localStorage.getItem(SELECTED_MONTH_KEY) || todayMonth;
+    activeMonth = localStorage.getItem(SELECTED_MONTH_KEY) || todayMonth;
+    reportMonthInput.value = activeMonth;
     try {
       const saved = JSON.parse(localStorage.getItem(MONTHLY_STORAGE_KEY) || '{}');
       if (saved && typeof saved === 'object' && !Array.isArray(saved)) monthlyLedgers = saved;
     } catch (_) {}
 
+    let changed = false;
     if (!Object.keys(monthlyLedgers).length) {
       try {
-        const legacyEntries = JSON.parse(localStorage.getItem(LEGACY_ENTRIES_KEY) || '[]');
-        const legacyMeta = JSON.parse(localStorage.getItem(LEGACY_META_KEY) || '{}');
-        monthlyLedgers[reportMonthInput.value] = {
-          entries: Array.isArray(legacyEntries) ? legacyEntries.map(normalizeEntry) : [],
-          preparedBy: legacyMeta.preparedBy || '',
-          reportDate: legacyMeta.reportDate || `${reportMonthInput.value}-01`,
-          openingBalance: amountFrom(localStorage.getItem(LEGACY_OPENING_BALANCE_KEY))
-        };
-        localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
+        changed = migrateLegacyEntries() || changed;
       } catch (_) {}
     }
-    loadMonth(reportMonthInput.value);
+
+    const repaired = redistributeLedgersByEntryDate(monthlyLedgers);
+    if (JSON.stringify(repaired) !== JSON.stringify(monthlyLedgers)) {
+      monthlyLedgers = repaired;
+      changed = true;
+    }
+    if (changed) localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
+    if (!monthlyLedgers[activeMonth] && Object.keys(monthlyLedgers).length) {
+      const newest = Object.keys(monthlyLedgers).sort().reverse()[0];
+      activeMonth = newest;
+      reportMonthInput.value = newest;
+      localStorage.setItem(SELECTED_MONTH_KEY, newest);
+    }
+    loadMonth(activeMonth);
   }
 
   document.getElementById('preparedBy').addEventListener('input', saveMeta);
@@ -208,11 +296,14 @@
     renderList();
   });
   reportMonthInput.addEventListener('change', () => {
-    if (!reportMonthInput.value) return;
+    if (!reportMonthInput.value) {
+      reportMonthInput.value = activeMonth;
+      return;
+    }
     switchToMonth(reportMonthInput.value);
   });
-  document.getElementById('prevMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(currentMonth(), -1)));
-  document.getElementById('nextMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(currentMonth(), 1)));
+  document.getElementById('prevMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(activeMonth, -1)));
+  document.getElementById('nextMonthBtn').addEventListener('click', () => switchToMonth(shiftMonth(activeMonth, 1)));
   document.getElementById('monthChips').addEventListener('click', event => {
     const chip = event.target.closest('[data-month]');
     if (chip) switchToMonth(chip.dataset.month);
@@ -724,9 +815,13 @@
   }
 
   document.getElementById('exportBackupBtn').addEventListener('click', () => {
+    saveCurrentMonth();
     downloadFile(JSON.stringify({
-      version: 1,
+      version: 2,
       exportedAt: new Date().toISOString(),
+      selectedMonth: activeMonth,
+      monthlyLedgers,
+      // Keep single-month fields for older restore tools.
       entries,
       meta: {
         preparedBy: document.getElementById('preparedBy').value,
@@ -734,7 +829,7 @@
       },
       openingBalance: openingBalance()
     }, null, 2), 'application/json;charset=utf-8;', 'fuelledger-backup.json');
-    showStatus('Backup exported. Keep it somewhere safe.');
+    showStatus('Full multi-month backup exported. Keep it somewhere safe.');
   });
 
   document.getElementById('importBackupBtn').addEventListener('click', () => document.getElementById('importBackupInput').click());
@@ -743,16 +838,35 @@
     if (!file) return;
     try {
       const backup = JSON.parse(await file.text());
-      if (!Array.isArray(backup.entries)) throw new Error('Invalid backup');
-      if (!window.confirm('Importing replaces all current entries and report details. Continue?')) return;
-      entries = backup.entries.map(normalizeEntry);
-      const meta = backup.meta && typeof backup.meta === 'object' ? backup.meta : {};
-      document.getElementById('preparedBy').value = String(meta.preparedBy || '');
-      document.getElementById('reportDate').value = String(meta.reportDate || '');
-      openingBalanceInput.value = String(Math.max(0, amountFrom(backup.openingBalance)));
-      saveMeta();
-      saveEntries();
-      resetForm();
+      const hasMonthly = backup.monthlyLedgers && typeof backup.monthlyLedgers === 'object' && !Array.isArray(backup.monthlyLedgers);
+      if (!hasMonthly && !Array.isArray(backup.entries)) throw new Error('Invalid backup');
+      if (!window.confirm('Importing replaces all saved monthly ledgers on this device. Continue?')) return;
+
+      if (hasMonthly) {
+        monthlyLedgers = redistributeLedgersByEntryDate(backup.monthlyLedgers);
+        activeMonth = backup.selectedMonth && monthlyLedgers[backup.selectedMonth]
+          ? backup.selectedMonth
+          : (Object.keys(monthlyLedgers).sort().reverse()[0] || activeMonth);
+      } else {
+        const meta = backup.meta && typeof backup.meta === 'object' ? backup.meta : {};
+        const fallbackMonth = monthFromDate(meta.reportDate, activeMonth);
+        monthlyLedgers = {};
+        backup.entries.map(normalizeEntry).forEach(entry => {
+          const targetMonth = monthFromDate(entry.date, fallbackMonth);
+          if (!monthlyLedgers[targetMonth]) monthlyLedgers[targetMonth] = emptyLedger();
+          monthlyLedgers[targetMonth].entries.push(entry);
+        });
+        if (!monthlyLedgers[fallbackMonth]) monthlyLedgers[fallbackMonth] = emptyLedger();
+        monthlyLedgers[fallbackMonth].preparedBy = String(meta.preparedBy || '');
+        monthlyLedgers[fallbackMonth].reportDate = String(meta.reportDate || `${fallbackMonth}-01`);
+        monthlyLedgers[fallbackMonth].openingBalance = Math.max(0, amountFrom(backup.openingBalance));
+        activeMonth = fallbackMonth;
+      }
+
+      localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
+      localStorage.setItem(SELECTED_MONTH_KEY, activeMonth);
+      reportMonthInput.value = activeMonth;
+      loadMonth(activeMonth);
       showStatus('Backup imported successfully.');
     } catch (_) {
       showStatus('That file is not a valid FuelLedger backup.', true);
@@ -1045,11 +1159,11 @@
   });
 
   document.getElementById('clearAllBtn').addEventListener('click', () => {
-    if (!entries.length || !window.confirm('Clear every transaction? Export a backup first if you may need these records later.')) return;
+    if (!entries.length || !window.confirm(`Clear every transaction in ${monthLabelText(activeMonth)}?\n\nOther months stay unchanged. Export a backup first if you may need these records later.`)) return;
     entries = [];
     saveEntries();
     resetForm();
-    showStatus('All transactions cleared.');
+    showStatus(`Cleared all transactions for ${monthLabelText(activeMonth)}.`);
   });
 
   function populatePrintPreview(){
