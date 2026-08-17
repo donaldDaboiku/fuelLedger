@@ -1,8 +1,11 @@
 (function(){
-  const STORAGE_KEY = 'frrEntries';
-  const META_KEY = 'frrReportMeta';
-  const OPENING_BALANCE_KEY = 'frrOpeningBalance';
+  const MONTHLY_STORAGE_KEY = 'frrMonthlyLedgers';
+  const SELECTED_MONTH_KEY = 'frrSelectedMonth';
+  const LEGACY_ENTRIES_KEY = 'frrEntries';
+  const LEGACY_META_KEY = 'frrReportMeta';
+  const LEGACY_OPENING_BALANCE_KEY = 'frrOpeningBalance';
   let entries = [];
+  let monthlyLedgers = {};
   const reportTitle = 'FuelLedger';
   const defaultLogo = 'image/web/icon.svg';
   let editingIndex = null;
@@ -68,13 +71,6 @@
     };
   }
 
-  try {
-    const savedEntries = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-    if (Array.isArray(savedEntries)) entries = savedEntries.map(normalizeEntry);
-  } catch (_) {
-    entries = [];
-  }
-
   const form = document.getElementById('entryForm');
   const entryList = document.getElementById('entryList');
   const emptyState = document.getElementById('emptyState');
@@ -82,6 +78,7 @@
   const entryBadge = document.getElementById('entryBadge');
   const previewBal = document.getElementById('previewBal');
   const genStamp = document.getElementById('genStamp');
+  const reportMonthInput = document.getElementById('reportMonth');
   const openingBalanceInput = document.getElementById('openingBalance');
   const formTitle = document.getElementById('formTitle');
   const saveEntryBtn = document.getElementById('saveEntryBtn');
@@ -91,34 +88,86 @@
   const printReport = document.getElementById('printReport');
   let printTrigger = null;
 
+  function currentMonth(){
+    return reportMonthInput.value || new Date().toISOString().slice(0, 7);
+  }
+
+  function emptyLedger(){
+    return { entries: [], preparedBy: '', reportDate: '', openingBalance: 0 };
+  }
+
   function sortEntries(){
     entries.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
   }
 
-  function saveEntries(){
+  function saveCurrentMonth(){
     sortEntries();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+    monthlyLedgers[currentMonth()] = {
+      entries,
+      preparedBy: document.getElementById('preparedBy').value,
+      reportDate: document.getElementById('reportDate').value,
+      openingBalance: openingBalance()
+    };
+    localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
   }
+
+  function saveEntries(){ saveCurrentMonth(); }
 
   function saveMeta(){
-    localStorage.setItem(META_KEY, JSON.stringify({
-      preparedBy: document.getElementById('preparedBy').value,
-      reportDate: document.getElementById('reportDate').value
-    }));
+    saveCurrentMonth();
   }
 
-  try {
-    const savedMeta = JSON.parse(localStorage.getItem(META_KEY) || '{}');
-    if (savedMeta.preparedBy) document.getElementById('preparedBy').value = savedMeta.preparedBy;
-    if (savedMeta.reportDate) document.getElementById('reportDate').value = savedMeta.reportDate;
-  } catch (_) {}
+  function loadMonth(month){
+    const ledger = monthlyLedgers[month] || emptyLedger();
+    entries = Array.isArray(ledger.entries) ? ledger.entries.map(normalizeEntry) : [];
+    document.getElementById('preparedBy').value = ledger.preparedBy || '';
+    document.getElementById('reportDate').value = ledger.reportDate || `${month}-01`;
+    openingBalanceInput.value = String(Math.max(0, amountFrom(ledger.openingBalance)));
+    editingIndex = null;
+    form.reset();
+    document.getElementById('f-date').value = `${month}-01`;
+    formTitle.textContent = 'Add a transaction';
+    saveEntryBtn.textContent = '+ Add to report';
+    renderList();
+  }
+
+  function initialiseMonthlyLedgers(){
+    const todayMonth = new Date().toISOString().slice(0, 7);
+    reportMonthInput.value = localStorage.getItem(SELECTED_MONTH_KEY) || todayMonth;
+    try {
+      const saved = JSON.parse(localStorage.getItem(MONTHLY_STORAGE_KEY) || '{}');
+      if (saved && typeof saved === 'object' && !Array.isArray(saved)) monthlyLedgers = saved;
+    } catch (_) {}
+
+    if (!Object.keys(monthlyLedgers).length) {
+      try {
+        const legacyEntries = JSON.parse(localStorage.getItem(LEGACY_ENTRIES_KEY) || '[]');
+        const legacyMeta = JSON.parse(localStorage.getItem(LEGACY_META_KEY) || '{}');
+        monthlyLedgers[reportMonthInput.value] = {
+          entries: Array.isArray(legacyEntries) ? legacyEntries.map(normalizeEntry) : [],
+          preparedBy: legacyMeta.preparedBy || '',
+          reportDate: legacyMeta.reportDate || `${reportMonthInput.value}-01`,
+          openingBalance: amountFrom(localStorage.getItem(LEGACY_OPENING_BALANCE_KEY))
+        };
+        localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
+      } catch (_) {}
+    }
+    loadMonth(reportMonthInput.value);
+  }
+
   document.getElementById('preparedBy').addEventListener('input', saveMeta);
   document.getElementById('reportDate').addEventListener('change', saveMeta);
-  openingBalanceInput.value = localStorage.getItem(OPENING_BALANCE_KEY) || '0';
   openingBalanceInput.addEventListener('input', () => {
-    const value = amountFrom(openingBalanceInput.value);
-    if (value >= 0) localStorage.setItem(OPENING_BALANCE_KEY, String(value));
+    const value = Math.max(0, amountFrom(openingBalanceInput.value));
+    openingBalanceInput.value = String(value);
+    saveCurrentMonth();
     renderList();
+  });
+  reportMonthInput.addEventListener('change', () => {
+    if (!reportMonthInput.value) return;
+    localStorage.setItem(SELECTED_MONTH_KEY, reportMonthInput.value);
+    loadMonth(reportMonthInput.value);
+    showStatus(`Showing ${new Date(`${reportMonthInput.value}-01T00:00:00`).toLocaleDateString('en-NG', { month:'long', year:'numeric' })}.`);
   });
 
   function openingBalance(){
@@ -131,10 +180,6 @@
   }
 
   genStamp.textContent = 'Generated ' + new Date().toLocaleString('en-NG', { dateStyle:'medium', timeStyle:'short' });
-  if (!document.getElementById('reportDate').value) {
-    document.getElementById('reportDate').valueAsDate = new Date();
-    saveMeta();
-  }
 
   const fReceived = document.getElementById('f-received');
   const fDisbursed = document.getElementById('f-disbursed');
@@ -299,7 +344,7 @@
     formTitle.textContent = 'Add a transaction';
     saveEntryBtn.textContent = '+ Add to report';
     if (date) document.getElementById('f-date').value = date;
-    else document.getElementById('f-date').valueAsDate = new Date();
+    else document.getElementById('f-date').value = `${currentMonth()}-01`;
     renderList();
     updatePreview();
     document.getElementById('f-date').focus();
@@ -435,7 +480,10 @@
       version: 1,
       exportedAt: new Date().toISOString(),
       entries,
-      meta: JSON.parse(localStorage.getItem(META_KEY) || '{}'),
+      meta: {
+        preparedBy: document.getElementById('preparedBy').value,
+        reportDate: document.getElementById('reportDate').value
+      },
       openingBalance: openingBalance()
     }, null, 2), 'application/json;charset=utf-8;', 'fuelledger-backup.json');
     showStatus('Backup exported. Keep it somewhere safe.');
@@ -454,7 +502,6 @@
       document.getElementById('preparedBy').value = String(meta.preparedBy || '');
       document.getElementById('reportDate').value = String(meta.reportDate || '');
       openingBalanceInput.value = String(Math.max(0, amountFrom(backup.openingBalance)));
-      localStorage.setItem(OPENING_BALANCE_KEY, openingBalanceInput.value);
       saveMeta();
       saveEntries();
       resetForm();
@@ -727,7 +774,6 @@
     }
     if (opening != null && Number.isFinite(opening)) {
       openingBalanceInput.value = String(Math.max(0, opening));
-      localStorage.setItem(OPENING_BALANCE_KEY, openingBalanceInput.value);
     }
     saveEntries();
     resetForm();
@@ -790,5 +836,5 @@
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
 
-  renderList();
+  initialiseMonthlyLedgers();
 })();
