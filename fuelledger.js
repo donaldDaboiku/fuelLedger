@@ -599,14 +599,117 @@
     return rows;
   }
 
+  function readU16(view, offset){ return view.getUint16(offset, true); }
+  function readU32(view, offset){ return view.getUint32(offset, true); }
+
+  async function inflateRaw(bytes){
+    if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unpack .xlsx files');
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  }
+
+  async function unzipXlsx(buffer){
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+    let eocd = -1;
+    for (let i = Math.max(0, bytes.length - 22 - 65536); i <= bytes.length - 22; i++) {
+      if (readU32(view, i) === 0x06054b50) eocd = i;
+    }
+    if (eocd < 0) throw new Error('Invalid Excel zip archive');
+    const count = readU16(view, eocd + 10);
+    let offset = readU32(view, eocd + 16);
+    const files = {};
+    for (let i = 0; i < count; i++) {
+      if (readU32(view, offset) !== 0x02014b50) throw new Error('Corrupt Excel archive');
+      const method = readU16(view, offset + 10);
+      const compSize = readU32(view, offset + 20);
+      const nameLen = readU16(view, offset + 28);
+      const extraLen = readU16(view, offset + 30);
+      const commentLen = readU16(view, offset + 32);
+      const localOffset = readU32(view, offset + 42);
+      const name = new TextDecoder('utf-8').decode(bytes.subarray(offset + 46, offset + 46 + nameLen));
+      const localNameLen = readU16(view, localOffset + 26);
+      const localExtraLen = readU16(view, localOffset + 28);
+      const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+      const compressed = bytes.subarray(dataStart, dataStart + compSize);
+      let raw;
+      if (method === 0) raw = compressed;
+      else if (method === 8) raw = await inflateRaw(compressed);
+      else throw new Error('Unsupported Excel compression');
+      files[name] = new TextDecoder('utf-8').decode(raw);
+      offset += 46 + nameLen + extraLen + commentLen;
+    }
+    return files;
+  }
+
+  function columnIndexFromRef(ref){
+    const match = String(ref || '').match(/^([A-Z]+)/i);
+    if (!match) return 0;
+    let index = 0;
+    for (const char of match[1].toUpperCase()) index = index * 26 + (char.charCodeAt(0) - 64);
+    return index - 1;
+  }
+
+  function firstSheetPath(files){
+    const workbook = files['xl/workbook.xml'];
+    const rels = files['xl/_rels/workbook.xml.rels'];
+    if (!workbook || !rels) return 'xl/worksheets/sheet1.xml';
+    const workbookDoc = new DOMParser().parseFromString(workbook, 'application/xml');
+    const firstSheet = Array.from(workbookDoc.getElementsByTagNameNS('*', 'sheet'))[0];
+    const relId = firstSheet?.getAttribute('r:id') || firstSheet?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+    if (!relId) return 'xl/worksheets/sheet1.xml';
+    const relsDoc = new DOMParser().parseFromString(rels, 'application/xml');
+    const relationship = Array.from(relsDoc.getElementsByTagNameNS('*', 'Relationship')).find(node => node.getAttribute('Id') === relId);
+    const target = relationship?.getAttribute('Target') || 'worksheets/sheet1.xml';
+    return target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;
+  }
+
+  async function parseXlsx(buffer){
+    const files = await unzipXlsx(buffer);
+    const shared = [];
+    if (files['xl/sharedStrings.xml']) {
+      const sharedDoc = new DOMParser().parseFromString(files['xl/sharedStrings.xml'], 'application/xml');
+      Array.from(sharedDoc.getElementsByTagNameNS('*', 'si')).forEach(si => {
+        shared.push(Array.from(si.getElementsByTagNameNS('*', 't')).map(node => node.textContent || '').join(''));
+      });
+    }
+    const sheetPath = firstSheetPath(files);
+    const sheetXml = files[sheetPath] || files['xl/worksheets/sheet1.xml'];
+    if (!sheetXml) throw new Error('Worksheet not found in Excel file');
+    const sheetDoc = new DOMParser().parseFromString(sheetXml, 'application/xml');
+    const rows = [];
+    Array.from(sheetDoc.getElementsByTagNameNS('*', 'row')).forEach(rowEl => {
+      const row = [];
+      Array.from(rowEl.children).forEach(cellEl => {
+        if ((cellEl.localName || '').toLowerCase() !== 'c') return;
+        const col = columnIndexFromRef(cellEl.getAttribute('r') || '');
+        while (row.length < col) row.push('');
+        const type = cellEl.getAttribute('t');
+        let value = '';
+        if (type === 's') {
+          const index = Number(Array.from(cellEl.getElementsByTagNameNS('*', 'v'))[0]?.textContent || 0);
+          value = shared[index] || '';
+        } else if (type === 'inlineStr') {
+          value = Array.from(cellEl.getElementsByTagNameNS('*', 't')).map(node => node.textContent || '').join('');
+        } else if (type === 'b') {
+          value = Array.from(cellEl.getElementsByTagNameNS('*', 'v'))[0]?.textContent === '1' ? 'TRUE' : 'FALSE';
+        } else {
+          value = Array.from(cellEl.getElementsByTagNameNS('*', 'v'))[0]?.textContent || '';
+        }
+        row[col] = value;
+      });
+      rows.push(row);
+    });
+    if (!rows.length) throw new Error('No rows found in Excel file');
+    return rows;
+  }
+
   async function matrixFromExcelFile(file){
     const name = file.name.toLowerCase();
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
     const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-    if (isZip || name.endsWith('.xlsx')) {
-      throw new Error('XLSX_UNSUPPORTED');
-    }
+    if (isZip || name.endsWith('.xlsx')) return parseXlsx(buffer);
     const text = new TextDecoder('utf-8').decode(bytes);
     if (/<Workbook[\s>]|ss:Workbook|spreadsheetml/i.test(text)) return parseSpreadsheetMl(text);
     if (/<table[\s>]/i.test(text)) return parseHtmlTable(text);
@@ -635,16 +738,13 @@
   document.getElementById('importExcelInput').addEventListener('change', async event => {
     const file = event.target.files[0];
     if (!file) return;
+    showStatus('Reading Excel file…');
     try {
       const matrix = await matrixFromExcelFile(file);
       const { imported, opening } = entriesFromMatrix(matrix);
       applyImportedEntries(imported, opening);
-    } catch (error) {
-      if (error && error.message === 'XLSX_UNSUPPORTED') {
-        showStatus('This looks like a newer .xlsx file. In Excel use File → Save As → CSV or “Excel 2003 XML”, then import that file.', true);
-      } else {
-        showStatus('Could not read that spreadsheet. Use a FuelLedger Excel export, CSV, or Excel 2003 XML (.xls).', true);
-      }
+    } catch (_) {
+      showStatus('Could not read that spreadsheet. Try a .xlsx, .xls, CSV, or FuelLedger Excel export.', true);
     } finally {
       event.target.value = '';
     }
