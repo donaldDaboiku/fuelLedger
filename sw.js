@@ -1,6 +1,6 @@
-const CACHE_NAME = 'fuelledger-v5';
+const CACHE_NAME = 'fuelledger-v6';
 const APP_SHELL = [
-  './funds_retirement_report_form.html',
+  './index.html',
   './fuelledger.css',
   './fuelledger.js',
   './manifest.json',
@@ -39,7 +39,8 @@ self.addEventListener('fetch', event => {
 
   const url = new URL(event.request.url);
   const isAppDocument = event.request.mode === 'navigate'
-    || url.pathname.endsWith('/funds_retirement_report_form.html');
+    || url.pathname.endsWith('/index.html')
+    || url.pathname.endsWith('/');
 
   event.respondWith((async () => {
     if (isAppDocument) {
@@ -48,7 +49,7 @@ self.addEventListener('fetch', event => {
         await cachePut(event.request, networkResponse.clone());
         return networkResponse;
       } catch (_) {
-        return (await caches.match('./funds_retirement_report_form.html'))
+        return (await caches.match('./index.html'))
           || Response.error();
       }
     }
@@ -61,7 +62,7 @@ self.addEventListener('fetch', event => {
       await cachePut(event.request, networkResponse.clone());
       return networkResponse;
     } catch (_) {
-      return (await caches.match('./funds_retirement_report_form.html'))
+      return (await caches.match('./index.html'))
         || Response.error();
     }
   })());

@@ -8,8 +8,49 @@
   let editingIndex = null;
 
   function amountFrom(value){
-    const amount = Number.parseFloat(value);
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    const cleaned = String(value ?? '')
+      .replace(/[₦$£€,\s]/g, '')
+      .replace(/^\((.*)\)$/, '-$1')
+      .trim();
+    if (!cleaned || cleaned === '-' || cleaned === '—') return 0;
+    const amount = Number.parseFloat(cleaned);
     return Number.isFinite(amount) ? amount : 0;
+  }
+
+  function toIsoDate(value){
+    const raw = String(value ?? '').trim();
+    if (!raw || raw === '—' || raw === '-') return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const slash = raw.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+    if (slash) {
+      let day = Number(slash[1]);
+      let month = Number(slash[2]);
+      let year = Number(slash[3]);
+      if (year < 100) year += 2000;
+      if (day > 31 && month <= 12) [day, month] = [month, day];
+      if (month > 12 && day <= 12) [day, month] = [month, day];
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      }
+    }
+    const named = raw.match(/^(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})$/);
+    if (named) {
+      const d = new Date(`${named[1]} ${named[2]} ${named[3]}`);
+      if (!Number.isNaN(d.getTime())) {
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      }
+    }
+    const serial = Number(raw);
+    if (Number.isFinite(serial) && serial > 20000 && serial < 80000) {
+      const d = new Date(Date.UTC(1899, 11, 30) + serial * 86400000);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    }
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+    }
+    return '';
   }
 
   function normalizeEntry(entry){
@@ -420,6 +461,190 @@
       showStatus('Backup imported successfully.');
     } catch (_) {
       showStatus('That file is not a valid FuelLedger backup.', true);
+    } finally {
+      event.target.value = '';
+    }
+  });
+
+  function normalizeHeader(value){
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  }
+
+  function mapColumns(headers){
+    const indexes = {};
+    headers.forEach((header, index) => {
+      const key = normalizeHeader(header);
+      if (!key) return;
+      if (indexes.date == null && /(^| )(trans )?date($| )/.test(` ${key} `)) indexes.date = index;
+      else if (indexes.receipt == null && /receipt|invoice/.test(key)) indexes.receipt = index;
+      else if (indexes.desc == null && /description|particular|narration/.test(key)) indexes.desc = index;
+      else if (indexes.vehicle == null && /vehicle/.test(key)) indexes.vehicle = index;
+      else if (indexes.requested == null && /requested/.test(key)) indexes.requested = index;
+      else if (indexes.from == null && /received from|from/.test(key) && !/amount received/.test(key)) indexes.from = index;
+      else if (indexes.to == null && /paid to|payee/.test(key)) indexes.to = index;
+      else if (indexes.received == null && /amount received|amt received|^received$/.test(key)) indexes.received = index;
+      else if (indexes.disbursed == null && /disbursed|amount paid|amt paid/.test(key)) indexes.disbursed = index;
+      else if (indexes.opening == null && /opening balance/.test(key)) indexes.opening = index;
+    });
+    return indexes;
+  }
+
+  function cellAt(row, index){
+    return index == null ? '' : (row[index] ?? '');
+  }
+
+  function entriesFromMatrix(matrix){
+    if (!matrix.length) return { imported: [], opening: null };
+    let headerIndex = -1;
+    let columns = {};
+    for (let i = 0; i < Math.min(matrix.length, 20); i++) {
+      const mapped = mapColumns(matrix[i]);
+      if (mapped.date != null && (mapped.received != null || mapped.disbursed != null || mapped.desc != null)) {
+        headerIndex = i;
+        columns = mapped;
+        break;
+      }
+    }
+    if (headerIndex < 0) throw new Error('Could not find a transaction header row');
+
+    let opening = null;
+    for (let i = 0; i < headerIndex; i++) {
+      const row = matrix[i].map(normalizeHeader);
+      const label = row.join(' ');
+      if (/opening balance/.test(label)) {
+        const value = matrix[i].find((cell, idx) => idx > 0 && String(cell).trim() !== '');
+        if (value != null) opening = amountFrom(value);
+      }
+    }
+
+    const imported = [];
+    for (let i = headerIndex + 1; i < matrix.length; i++) {
+      const row = matrix[i];
+      if (!row || !row.some(cell => String(cell ?? '').trim())) continue;
+      const joined = row.map(cell => String(cell ?? '').trim().toLowerCase()).join(' ');
+      if (/^no transactions|^total |^closing balance|^prepared by|^report date|^opening balance/.test(joined)) continue;
+      const entry = normalizeEntry({
+        date: toIsoDate(cellAt(row, columns.date)),
+        receipt: cellAt(row, columns.receipt),
+        desc: cellAt(row, columns.desc),
+        vehicle: cellAt(row, columns.vehicle),
+        requested: cellAt(row, columns.requested),
+        from: cellAt(row, columns.from),
+        to: cellAt(row, columns.to),
+        received: amountFrom(cellAt(row, columns.received)),
+        disbursed: amountFrom(cellAt(row, columns.disbursed)),
+        createdAt: Date.now() + i
+      });
+      if (!entry.date && entry.received === 0 && entry.disbursed === 0 && !entry.desc) continue;
+      if (!entry.date && entry.received === 0 && entry.disbursed === 0) continue;
+      if (entry.received === 0 && entry.disbursed === 0) continue;
+      if (!entry.date) entry.date = new Date().toISOString().slice(0, 10);
+      imported.push(entry);
+    }
+    return { imported, opening };
+  }
+
+  function parseCsv(text){
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let inQuotes = false;
+    const input = text.replace(/^\uFEFF/, '');
+    for (let i = 0; i < input.length; i++) {
+      const char = input[i];
+      const next = input[i + 1];
+      if (inQuotes) {
+        if (char === '"' && next === '"') { cell += '"'; i++; }
+        else if (char === '"') inQuotes = false;
+        else cell += char;
+        continue;
+      }
+      if (char === '"') inQuotes = true;
+      else if (char === ',') { row.push(cell); cell = ''; }
+      else if (char === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+      else if (char !== '\r') cell += char;
+    }
+    if (cell.length || row.length) { row.push(cell); rows.push(row); }
+    return rows;
+  }
+
+  function parseHtmlTable(text){
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const table = doc.querySelector('table');
+    if (!table) throw new Error('No table found');
+    return Array.from(table.rows).map(tr => Array.from(tr.cells).map(td => td.textContent.trim()));
+  }
+
+  function parseSpreadsheetMl(text){
+    const doc = new DOMParser().parseFromString(text.replace(/^\uFEFF/, ''), 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('Invalid spreadsheet XML');
+    const rows = [];
+    Array.from(doc.getElementsByTagNameNS('*', 'Row')).forEach(rowEl => {
+      const cells = [];
+      let nextIndex = 1;
+      Array.from(rowEl.children).forEach(cellEl => {
+        if (!/cell$/i.test(cellEl.localName || '')) return;
+        const indexAttr = cellEl.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', 'Index')
+          || cellEl.getAttribute('ss:Index')
+          || cellEl.getAttribute('Index');
+        const index = indexAttr ? Number(indexAttr) : nextIndex;
+        while (cells.length < index - 1) cells.push('');
+        const data = Array.from(cellEl.getElementsByTagNameNS('*', 'Data'))[0];
+        cells.push(data ? data.textContent.trim() : cellEl.textContent.trim());
+        nextIndex = index + 1;
+      });
+      if (cells.length) rows.push(cells);
+    });
+    if (!rows.length) throw new Error('No spreadsheet rows found');
+    return rows;
+  }
+
+  async function matrixFromExcelFile(file){
+    const name = file.name.toLowerCase();
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
+    if (isZip || name.endsWith('.xlsx')) {
+      throw new Error('XLSX_UNSUPPORTED');
+    }
+    const text = new TextDecoder('utf-8').decode(bytes);
+    if (/<Workbook[\s>]|ss:Workbook|spreadsheetml/i.test(text)) return parseSpreadsheetMl(text);
+    if (/<table[\s>]/i.test(text)) return parseHtmlTable(text);
+    if (name.endsWith('.csv') || /[,;\t]/.test(text.split(/\r?\n/, 1)[0] || '')) return parseCsv(text);
+    throw new Error('Unsupported spreadsheet format');
+  }
+
+  function applyImportedEntries(imported, opening){
+    if (!imported.length) throw new Error('No transactions found in that file');
+    if (entries.length) {
+      if (!window.confirm(`Found ${imported.length} transaction${imported.length === 1 ? '' : 's'}. Add them to your current records?\n\nTip: use Clear all first if you want only the imported records.`)) return;
+      entries = entries.concat(imported);
+    } else {
+      entries = imported;
+    }
+    if (opening != null && Number.isFinite(opening)) {
+      openingBalanceInput.value = String(Math.max(0, opening));
+      localStorage.setItem(OPENING_BALANCE_KEY, openingBalanceInput.value);
+    }
+    saveEntries();
+    resetForm();
+    showStatus(`${imported.length} transaction${imported.length === 1 ? '' : 's'} imported from Excel.`);
+  }
+
+  document.getElementById('importExcelBtn').addEventListener('click', () => document.getElementById('importExcelInput').click());
+  document.getElementById('importExcelInput').addEventListener('change', async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const matrix = await matrixFromExcelFile(file);
+      const { imported, opening } = entriesFromMatrix(matrix);
+      applyImportedEntries(imported, opening);
+    } catch (error) {
+      if (error && error.message === 'XLSX_UNSUPPORTED') {
+        showStatus('This looks like a newer .xlsx file. In Excel use File → Save As → CSV or “Excel 2003 XML”, then import that file.', true);
+      } else {
+        showStatus('Could not read that spreadsheet. Use a FuelLedger Excel export, CSV, or Excel 2003 XML (.xls).', true);
+      }
     } finally {
       event.target.value = '';
     }
