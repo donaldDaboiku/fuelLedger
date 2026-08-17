@@ -168,7 +168,7 @@
       <div class="ledger-tools">
         <button class="secondary" id="exportCsvBtn" type="button">Export CSV</button>
         <button class="secondary" id="exportExcelBtn" type="button">Export Excel</button>
-        <button class="secondary" id="importExcelBtn" type="button">Import Excel</button>
+        <button class="secondary" id="importExcelBtn" type="button" title="Import .xlsx / .xls / CSV — multi-sheet workbooks supported">Import Excel</button>
         <button class="secondary" id="exportBackupBtn" type="button">Export backup</button>
         <button class="secondary" id="importBackupBtn" type="button">Import backup</button>
         <button class="ghost" id="clearAllBtn" type="button">Clear this month</button>
@@ -214,6 +214,24 @@
     </div>
   </div>
   <div class="print-preview-content" id="printPreviewContent"></div>
+</dialog>
+
+<dialog class="sheet-picker-modal" id="sheetPickerModal" aria-labelledby="sheetPickerTitle">
+  <div class="print-preview-header">
+    <h2 id="sheetPickerTitle">Choose Excel sheets</h2>
+    <div class="print-preview-actions">
+      <button class="ghost" id="cancelSheetPickerBtn" type="button">Cancel</button>
+      <button id="confirmSheetPickerBtn" type="button">Import selected</button>
+    </div>
+  </div>
+  <div class="sheet-picker-body">
+    <p id="sheetPickerHint">This workbook has multiple sheets. Select the ones to import.</p>
+    <div class="sheet-picker-actions-row">
+      <button class="ghost" id="selectAllSheetsBtn" type="button">Select all</button>
+      <button class="ghost" id="clearSheetSelectionBtn" type="button">Clear selection</button>
+    </div>
+    <div id="sheetPickerList" class="sheet-picker-list"></div>
+  </div>
 </dialog>
 
 <script src="fuelledger.js"></script>

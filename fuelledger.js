@@ -367,9 +367,10 @@
   }
 
   function entriesForMonth(month){
+    if (month === currentMonth()) return entries.map(normalizeEntry);
     const ledger = monthlyLedgers[month];
     if (ledger && Array.isArray(ledger.entries)) return ledger.entries.map(normalizeEntry);
-    return month === currentMonth() ? entries.slice() : [];
+    return [];
   }
 
   function summarizeEntries(list){
@@ -470,14 +471,14 @@
     return Array.from(map.values()).sort((a, b) => b.disbursed - a.disbursed || b.received - a.received || a.vehicle.localeCompare(b.vehicle));
   }
 
-  function renderVehicleBarChart(target, rows){
+  function renderVehicleBarChart(target, rows, metric){
     if (!rows.length) {
       target.innerHTML = '<div class="chart-empty">No vehicle amounts yet</div>';
       return;
     }
-    const maxValue = Math.max(...rows.map(row => row.disbursed), 0);
+    const maxValue = Math.max(...rows.map(row => row[metric]), 0);
     if (!maxValue) {
-      target.innerHTML = '<div class="chart-empty">No vehicle disbursements yet</div>';
+      target.innerHTML = '<div class="chart-empty">No vehicle amounts yet</div>';
       return;
     }
     const rowHeight = 28;
@@ -489,45 +490,50 @@
     const chartW = width - padL - padR;
     const bars = rows.map((row, index) => {
       const y = padT + index * rowHeight;
-      const barW = Math.max(2, (row.disbursed / maxValue) * chartW);
+      const amount = row[metric];
+      const barW = Math.max(2, (amount / maxValue) * chartW);
       const label = row.vehicle.length > 14 ? `${row.vehicle.slice(0, 13)}…` : row.vehicle;
       return `
         <g>
           <text x="${padL - 8}" y="${y + 14}" text-anchor="end" font-size="11" fill="#5b6b7a">${escapeHtml(label)}</text>
           <rect x="${padL}" y="${y + 4}" width="${barW}" height="16" fill="${row.color}" rx="3"></rect>
-          <text x="${padL + barW + 6}" y="${y + 15}" font-size="10" fill="#1c2b3a">${escapeHtml(nairaFmt(row.disbursed))}</text>
+          <text x="${padL + barW + 6}" y="${y + 15}" font-size="10" fill="#1c2b3a">${escapeHtml(nairaFmt(amount))}</text>
         </g>`;
     }).join('');
-    target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Vehicle disbursement bar chart">${bars}</svg>`;
+    target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Vehicle ${metric} bar chart">${bars}</svg>`;
   }
 
-  function renderVehicleBreakdown(list, title){
+  function renderVehicleBreakdown(list, scopeLabel){
     const vehicleTitle = document.getElementById('vehicleChartTitle');
     const vehiclePie = document.getElementById('vehiclePieChart');
     const vehicleBar = document.getElementById('vehicleBarChart');
     const vehicleLegend = document.getElementById('vehicleLegend');
     if (!vehiclePie || !vehicleBar || !vehicleLegend) return;
-    if (vehicleTitle) vehicleTitle.textContent = title;
 
     const rows = vehicleBreakdown(list).map((row, index) => ({
       ...row,
       color: VEHICLE_COLORS[index % VEHICLE_COLORS.length]
     }));
-    const pieSlices = rows
-      .filter(row => row.disbursed > 0)
-      .map(row => ({ label: row.vehicle, value: row.disbursed, color: row.color }));
+    const named = rows.filter(row => row.vehicle !== 'Unassigned');
+    const hasDisbursed = rows.some(row => row.disbursed > 0);
+    const metric = hasDisbursed ? 'disbursed' : 'received';
+    const metricLabel = metric === 'disbursed' ? 'Disbursement' : 'Received';
+    const chartRows = (named.some(row => row[metric] > 0) ? named : rows).filter(row => row[metric] > 0);
+    if (vehicleTitle) vehicleTitle.textContent = `${metricLabel} by vehicle · ${scopeLabel}`;
 
-    if (!pieSlices.length) {
-      vehiclePie.innerHTML = '<div class="chart-empty">No vehicle disbursements yet</div>';
-      vehicleBar.innerHTML = '<div class="chart-empty">Add vehicle numbers on transactions to see this breakdown</div>';
+    if (!chartRows.length) {
+      const hasVehicleLabels = named.length > 0;
+      vehiclePie.innerHTML = `<div class="chart-empty">${hasVehicleLabels ? `No ${metricLabel.toLowerCase()} amounts on vehicle rows yet` : 'No vehicle numbers on transactions yet'}</div>`;
+      vehicleBar.innerHTML = `<div class="chart-empty">${hasVehicleLabels ? 'Add received or disbursed amounts on those vehicles' : 'Add a Vehicle No. on transactions to see this breakdown'}</div>`;
       vehicleLegend.innerHTML = '';
       return;
     }
 
+    const pieSlices = chartRows.map(row => ({ label: row.vehicle, value: row[metric], color: row.color }));
     renderPieChart(vehiclePie, pieSlices);
-    renderVehicleBarChart(vehicleBar, rows.filter(row => row.disbursed > 0));
-    vehicleLegend.innerHTML = rows.filter(row => row.disbursed > 0).map(row =>
-      `<span><i class="swatch" style="background:${row.color}"></i>${escapeHtml(row.vehicle)} ${nairaFmt(row.disbursed)} (${row.count})</span>`
+    renderVehicleBarChart(vehicleBar, chartRows, metric);
+    vehicleLegend.innerHTML = chartRows.map(row =>
+      `<span><i class="swatch" style="background:${row.color}"></i>${escapeHtml(row.vehicle)} ${nairaFmt(row[metric])} (${row.count})</span>`
     ).join('');
   }
 
@@ -595,7 +601,7 @@
         <span><i class="swatch" style="background:#1c7a4d"></i>Received ${nairaFmt(totals.received)}</span>
         <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>`;
       renderBarChart(barChart, dayBars);
-      renderVehicleBreakdown(weekEntries, 'This week: disbursement by vehicle');
+      renderVehicleBreakdown(weekEntries, 'This week');
       return;
     }
 
@@ -624,7 +630,7 @@
       <span><i class="swatch" style="background:#1c7a4d"></i>Bar: received</span>
       <span><i class="swatch" style="background:#a3372c"></i>Bar: disbursed</span>`;
     renderBarChart(barChart, weekBars);
-    renderVehicleBreakdown(monthEntries, `Disbursement by vehicle · ${monthLabelText(month)}`);
+    renderVehicleBreakdown(monthEntries, monthLabelText(month));
   }
 
   function renderList(){
@@ -965,7 +971,7 @@
       if (indexes.date == null && /(^| )(trans )?date($| )/.test(` ${key} `)) indexes.date = index;
       else if (indexes.receipt == null && /receipt|invoice/.test(key)) indexes.receipt = index;
       else if (indexes.desc == null && /description|particular|narration/.test(key)) indexes.desc = index;
-      else if (indexes.vehicle == null && /vehicle/.test(key)) indexes.vehicle = index;
+      else if (indexes.vehicle == null && /(vehicle|veh\.?|plate|reg\.?\s*no|registration)/.test(key)) indexes.vehicle = index;
       else if (indexes.requested == null && /requested/.test(key)) indexes.requested = index;
       else if (indexes.from == null && /received from|from/.test(key) && !/amount received/.test(key)) indexes.from = index;
       else if (indexes.to == null && /paid to|payee/.test(key)) indexes.to = index;
@@ -1062,18 +1068,20 @@
     return Array.from(table.rows).map(tr => Array.from(tr.cells).map(td => td.textContent.trim()));
   }
 
-  function parseSpreadsheetMl(text){
-    const doc = new DOMParser().parseFromString(text.replace(/^\uFEFF/, ''), 'application/xml');
-    if (doc.querySelector('parsererror')) throw new Error('Invalid spreadsheet XML');
+  function ssAttr(el, name){
+    return el.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', name)
+      || el.getAttribute(`ss:${name}`)
+      || el.getAttribute(name);
+  }
+
+  function rowsFromSpreadsheetMlWorksheet(ws){
     const rows = [];
-    Array.from(doc.getElementsByTagNameNS('*', 'Row')).forEach(rowEl => {
+    Array.from(ws.getElementsByTagNameNS('*', 'Row')).forEach(rowEl => {
       const cells = [];
       let nextIndex = 1;
       Array.from(rowEl.children).forEach(cellEl => {
         if (!/cell$/i.test(cellEl.localName || '')) return;
-        const indexAttr = cellEl.getAttributeNS('urn:schemas-microsoft-com:office:spreadsheet', 'Index')
-          || cellEl.getAttribute('ss:Index')
-          || cellEl.getAttribute('Index');
+        const indexAttr = ssAttr(cellEl, 'Index');
         const index = indexAttr ? Number(indexAttr) : nextIndex;
         while (cells.length < index - 1) cells.push('');
         const data = Array.from(cellEl.getElementsByTagNameNS('*', 'Data'))[0];
@@ -1082,8 +1090,20 @@
       });
       if (cells.length) rows.push(cells);
     });
-    if (!rows.length) throw new Error('No spreadsheet rows found');
     return rows;
+  }
+
+  function parseSpreadsheetMlSheets(text){
+    const doc = new DOMParser().parseFromString(text.replace(/^\uFEFF/, ''), 'application/xml');
+    if (doc.querySelector('parsererror')) throw new Error('Invalid spreadsheet XML');
+    const worksheets = Array.from(doc.getElementsByTagNameNS('*', 'Worksheet'));
+    if (!worksheets.length) throw new Error('No spreadsheet sheets found');
+    const sheets = worksheets.map((ws, index) => ({
+      name: ssAttr(ws, 'Name') || `Sheet${index + 1}`,
+      matrix: rowsFromSpreadsheetMlWorksheet(ws)
+    })).filter(sheet => sheet.matrix.length);
+    if (!sheets.length) throw new Error('No spreadsheet rows found');
+    return sheets;
   }
 
   function readU16(view, offset){ return view.getUint16(offset, true); }
@@ -1137,32 +1157,30 @@
     return index - 1;
   }
 
-  function firstSheetPath(files){
+  function listWorkbookSheets(files){
     const workbook = files['xl/workbook.xml'];
     const rels = files['xl/_rels/workbook.xml.rels'];
-    if (!workbook || !rels) return 'xl/worksheets/sheet1.xml';
+    if (!workbook) {
+      const fallback = Object.keys(files).filter(path => /^xl\/worksheets\/sheet\d+\.xml$/i.test(path)).sort();
+      return fallback.map((path, index) => ({ name: `Sheet${index + 1}`, path }));
+    }
     const workbookDoc = new DOMParser().parseFromString(workbook, 'application/xml');
-    const firstSheet = Array.from(workbookDoc.getElementsByTagNameNS('*', 'sheet'))[0];
-    const relId = firstSheet?.getAttribute('r:id') || firstSheet?.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
-    if (!relId) return 'xl/worksheets/sheet1.xml';
-    const relsDoc = new DOMParser().parseFromString(rels, 'application/xml');
-    const relationship = Array.from(relsDoc.getElementsByTagNameNS('*', 'Relationship')).find(node => node.getAttribute('Id') === relId);
-    const target = relationship?.getAttribute('Target') || 'worksheets/sheet1.xml';
-    return target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;
+    const relsDoc = rels ? new DOMParser().parseFromString(rels, 'application/xml') : null;
+    const relationships = relsDoc
+      ? Array.from(relsDoc.getElementsByTagNameNS('*', 'Relationship'))
+      : [];
+    return Array.from(workbookDoc.getElementsByTagNameNS('*', 'sheet')).map((sheetEl, index) => {
+      const name = sheetEl.getAttribute('name') || `Sheet${index + 1}`;
+      const relId = sheetEl.getAttribute('r:id')
+        || sheetEl.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id');
+      const relationship = relationships.find(node => node.getAttribute('Id') === relId);
+      const target = relationship?.getAttribute('Target') || `worksheets/sheet${index + 1}.xml`;
+      const path = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;
+      return { name, path };
+    });
   }
 
-  async function parseXlsx(buffer){
-    const files = await unzipXlsx(buffer);
-    const shared = [];
-    if (files['xl/sharedStrings.xml']) {
-      const sharedDoc = new DOMParser().parseFromString(files['xl/sharedStrings.xml'], 'application/xml');
-      Array.from(sharedDoc.getElementsByTagNameNS('*', 'si')).forEach(si => {
-        shared.push(Array.from(si.getElementsByTagNameNS('*', 't')).map(node => node.textContent || '').join(''));
-      });
-    }
-    const sheetPath = firstSheetPath(files);
-    const sheetXml = files[sheetPath] || files['xl/worksheets/sheet1.xml'];
-    if (!sheetXml) throw new Error('Worksheet not found in Excel file');
+  function sheetXmlToMatrix(sheetXml, shared){
     const sheetDoc = new DOMParser().parseFromString(sheetXml, 'application/xml');
     const rows = [];
     Array.from(sheetDoc.getElementsByTagNameNS('*', 'row')).forEach(rowEl => {
@@ -1187,27 +1205,129 @@
       });
       rows.push(row);
     });
-    if (!rows.length) throw new Error('No rows found in Excel file');
     return rows;
   }
 
-  async function matrixFromExcelFile(file){
+  async function parseXlsxSheets(buffer){
+    const files = await unzipXlsx(buffer);
+    const shared = [];
+    if (files['xl/sharedStrings.xml']) {
+      const sharedDoc = new DOMParser().parseFromString(files['xl/sharedStrings.xml'], 'application/xml');
+      Array.from(sharedDoc.getElementsByTagNameNS('*', 'si')).forEach(si => {
+        shared.push(Array.from(si.getElementsByTagNameNS('*', 't')).map(node => node.textContent || '').join(''));
+      });
+    }
+    const defs = listWorkbookSheets(files);
+    const sheets = defs.map(def => {
+      const sheetXml = files[def.path];
+      if (!sheetXml) return null;
+      return { name: def.name, matrix: sheetXmlToMatrix(sheetXml, shared) };
+    }).filter(sheet => sheet && sheet.matrix.length);
+    if (!sheets.length) throw new Error('No worksheets found in Excel file');
+    return sheets;
+  }
+
+  async function sheetsFromExcelFile(file){
     const name = file.name.toLowerCase();
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
     const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
-    if (isZip || name.endsWith('.xlsx')) return parseXlsx(buffer);
+    if (isZip || name.endsWith('.xlsx')) return parseXlsxSheets(buffer);
     const text = new TextDecoder('utf-8').decode(bytes);
-    if (/<Workbook[\s>]|ss:Workbook|spreadsheetml/i.test(text)) return parseSpreadsheetMl(text);
-    if (/<table[\s>]/i.test(text)) return parseHtmlTable(text);
-    if (name.endsWith('.csv') || /[,;\t]/.test(text.split(/\r?\n/, 1)[0] || '')) return parseCsv(text);
+    if (/<Workbook[\s>]|ss:Workbook|spreadsheetml/i.test(text)) return parseSpreadsheetMlSheets(text);
+    if (/<table[\s>]/i.test(text)) return [{ name: 'Sheet1', matrix: parseHtmlTable(text) }];
+    if (name.endsWith('.csv') || /[,;\t]/.test(text.split(/\r?\n/, 1)[0] || '')) {
+      return [{ name: file.name || 'Sheet1', matrix: parseCsv(text) }];
+    }
     throw new Error('Unsupported spreadsheet format');
   }
 
-  function applyImportedEntries(imported, opening){
+  function probeSheet(sheet){
+    try {
+      const result = entriesFromMatrix(sheet.matrix);
+      return {
+        name: sheet.name,
+        imported: result.imported,
+        opening: result.opening,
+        usable: result.imported.length > 0
+      };
+    } catch (_) {
+      return { name: sheet.name, imported: [], opening: null, usable: false };
+    }
+  }
+
+  const sheetPickerModal = document.getElementById('sheetPickerModal');
+  const sheetPickerList = document.getElementById('sheetPickerList');
+  const sheetPickerHint = document.getElementById('sheetPickerHint');
+  let sheetPickerResolve = null;
+
+  function closeSheetPicker(result){
+    const resolve = sheetPickerResolve;
+    sheetPickerResolve = null;
+    if (sheetPickerModal.open) sheetPickerModal.close();
+    resolve?.(result);
+  }
+
+  function chooseSheets(probed){
+    return new Promise(resolve => {
+      sheetPickerResolve = resolve;
+      const usableCount = probed.filter(sheet => sheet.usable).length;
+      sheetPickerHint.textContent = usableCount
+        ? `This workbook has ${probed.length} sheet${probed.length === 1 ? '' : 's'}. Select which ledger sheets to import.`
+        : 'No sheet looks like a FuelLedger table. You can still try selecting sheets manually.';
+      sheetPickerList.replaceChildren();
+      probed.forEach((sheet, index) => {
+        const label = document.createElement('label');
+        label.className = 'sheet-option';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = String(index);
+        checkbox.checked = sheet.usable || (usableCount === 0 && index === 0);
+        checkbox.disabled = !sheet.usable && usableCount > 0;
+        const text = document.createElement('span');
+        const title = document.createElement('strong');
+        title.textContent = sheet.name;
+        const meta = document.createElement('span');
+        meta.textContent = sheet.usable
+          ? `${sheet.imported.length} transaction${sheet.imported.length === 1 ? '' : 's'} found`
+          : 'No ledger rows detected';
+        text.append(title, meta);
+        label.append(checkbox, text);
+        sheetPickerList.append(label);
+      });
+      sheetPickerModal.showModal();
+    });
+  }
+
+  document.getElementById('cancelSheetPickerBtn').addEventListener('click', () => closeSheetPicker(null));
+  document.getElementById('confirmSheetPickerBtn').addEventListener('click', () => {
+    const selected = Array.from(sheetPickerList.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(input => Number(input.value));
+    closeSheetPicker(selected);
+  });
+  document.getElementById('selectAllSheetsBtn').addEventListener('click', () => {
+    sheetPickerList.querySelectorAll('input[type="checkbox"]:not(:disabled)').forEach(input => { input.checked = true; });
+  });
+  document.getElementById('clearSheetSelectionBtn').addEventListener('click', () => {
+    sheetPickerList.querySelectorAll('input[type="checkbox"]').forEach(input => { input.checked = false; });
+  });
+  sheetPickerModal.addEventListener('click', event => {
+    if (event.target === sheetPickerModal) closeSheetPicker(null);
+  });
+  sheetPickerModal.addEventListener('cancel', event => {
+    event.preventDefault();
+    closeSheetPicker(null);
+  });
+
+  function applyImportedEntries(imported, opening, meta = {}){
     if (!imported.length) throw new Error('No transactions found in that file');
+    const sheetNote = meta.sheetCount > 1
+      ? ` from ${meta.sheetCount} sheets`
+      : meta.sheetName
+        ? ` from “${meta.sheetName}”`
+        : '';
     if (entries.length) {
-      if (!window.confirm(`Found ${imported.length} transaction${imported.length === 1 ? '' : 's'}. Add them to your current records?\n\nTip: use Clear all first if you want only the imported records.`)) return;
+      if (!window.confirm(`Found ${imported.length} transaction${imported.length === 1 ? '' : 's'}${sheetNote}. Add them to your current records?\n\nTip: clear this month first if you want only the imported records.`)) return;
       entries = entries.concat(imported);
     } else {
       entries = imported;
@@ -1217,20 +1337,46 @@
     }
     saveEntries();
     resetForm();
-    showStatus(`${imported.length} transaction${imported.length === 1 ? '' : 's'} imported from Excel.`);
+    showStatus(`${imported.length} transaction${imported.length === 1 ? '' : 's'} imported${sheetNote}.`);
   }
 
   document.getElementById('importExcelBtn').addEventListener('click', () => document.getElementById('importExcelInput').click());
   document.getElementById('importExcelInput').addEventListener('change', async event => {
     const file = event.target.files[0];
     if (!file) return;
-    showStatus('Reading Excel file…');
+    showStatus('Reading Excel workbook…');
     try {
-      const matrix = await matrixFromExcelFile(file);
-      const { imported, opening } = entriesFromMatrix(matrix);
-      applyImportedEntries(imported, opening);
+      const sheets = await sheetsFromExcelFile(file);
+      const probed = sheets.map(probeSheet);
+      const usable = probed.filter(sheet => sheet.usable);
+      let selected = usable;
+      if (probed.length > 1) {
+        const indexes = await chooseSheets(probed);
+        if (!indexes) {
+          showStatus('Import cancelled.');
+          return;
+        }
+        selected = indexes.map(index => probed[index]).filter(sheet => sheet && sheet.usable);
+      } else if (!usable.length) {
+        throw new Error('No transactions found');
+      }
+      if (!selected.length) {
+        showStatus(
+          usable.length
+            ? 'Select at least one sheet with transactions.'
+            : 'No sheet contained ledger transactions.',
+          true
+        );
+        return;
+      }
+      const imported = selected.flatMap(sheet => sheet.imported);
+      const opening = selected.map(sheet => sheet.opening).find(value => value != null && Number.isFinite(value));
+      applyImportedEntries(imported, opening, {
+        sheetCount: selected.length,
+        sheetName: selected.length === 1 ? selected[0].name : ''
+      });
     } catch (_) {
-      showStatus('Could not read that spreadsheet. Try a .xlsx, .xls, CSV, or FuelLedger Excel export.', true);
+      showStatus('Could not read that spreadsheet. Try a multi-sheet .xlsx, .xls, CSV, or FuelLedger Excel export.', true);
     } finally {
       event.target.value = '';
     }
