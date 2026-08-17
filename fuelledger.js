@@ -10,6 +10,7 @@
   const defaultLogo = 'image/web/icon.svg';
   let editingIndex = null;
   let dashboardView = 'month';
+  let dashboardWeek = 0;
   let activeMonth = new Date().toISOString().slice(0, 7);
 
   function amountFrom(value){
@@ -311,8 +312,16 @@
   document.querySelectorAll('.dash-toggle').forEach(button => {
     button.addEventListener('click', () => {
       dashboardView = button.dataset.dashView === 'week' ? 'week' : 'month';
+      if (dashboardView === 'week') dashboardWeek = preferredWeekOfMonth(currentMonth(), entriesForMonth(currentMonth()));
       renderDashboard();
     });
+  });
+  document.getElementById('weekChips').addEventListener('click', event => {
+    const chip = event.target.closest('[data-week]');
+    if (!chip) return;
+    dashboardWeek = Number(chip.dataset.week);
+    dashboardView = 'week';
+    renderDashboard();
   });
 
   function openingBalance(){
@@ -364,6 +373,58 @@
     const day = Number(String(isoDate || '').slice(8, 10));
     if (!day) return 1;
     return Math.min(5, Math.ceil(day / 7));
+  }
+
+  function daysInMonth(month){
+    const [year, mon] = String(month || '').split('-').map(Number);
+    if (!year || !mon) return 31;
+    return new Date(year, mon, 0).getDate();
+  }
+
+  function weekCountForMonth(month){
+    return Math.min(5, Math.ceil(daysInMonth(month) / 7));
+  }
+
+  function weekRangeInMonth(month, week){
+    const days = daysInMonth(month);
+    const startDay = Math.min(days, (week - 1) * 7 + 1);
+    const endDay = Math.min(days, week * 7);
+    const startIso = `${month}-${String(startDay).padStart(2, '0')}`;
+    const endIso = `${month}-${String(endDay).padStart(2, '0')}`;
+    return { startDay, endDay, startIso, endIso };
+  }
+
+  function preferredWeekOfMonth(month, list){
+    const today = new Date().toISOString().slice(0, 10);
+    if (today.slice(0, 7) === month) return weekOfMonth(today);
+    const counts = new Map();
+    list.forEach(entry => {
+      const week = weekOfMonth(entry.date);
+      counts.set(week, (counts.get(week) || 0) + 1);
+    });
+    if (!counts.size) return 1;
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || b[0] - a[0])[0][0];
+  }
+
+  function monthFromSheetName(name){
+    const raw = String(name || '').trim();
+    if (!raw) return '';
+    const iso = raw.match(/(20\d{2})[-_/\s.](0?[1-9]|1[0-2])\b/);
+    if (iso) return `${iso[1]}-${String(Number(iso[2])).padStart(2, '0')}`;
+    const isoRev = raw.match(/\b(0?[1-9]|1[0-2])[-_/\s.](20\d{2})\b/);
+    if (isoRev) return `${isoRev[2]}-${String(Number(isoRev[1])).padStart(2, '0')}`;
+    const months = {
+      jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+      may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+      sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12
+    };
+    const named = raw.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\b\.?\s*(20\d{2})?/i);
+    if (named) {
+      const mon = months[named[1].toLowerCase()];
+      const year = named[2] ? Number(named[2]) : Number(String(activeMonth).slice(0, 4));
+      if (mon) return `${year}-${String(mon).padStart(2, '0')}`;
+    }
+    return '';
   }
 
   function entriesForMonth(month){
@@ -537,16 +598,6 @@
     ).join('');
   }
 
-  function allSavedEntries(){
-    const map = new Map();
-    Object.keys(monthlyLedgers).forEach(month => {
-      const list = Array.isArray(monthlyLedgers[month]?.entries) ? monthlyLedgers[month].entries : [];
-      list.forEach(entry => map.set(`${entry.date}|${entry.createdAt}|${entry.desc}|${entry.receipt}`, normalizeEntry(entry)));
-    });
-    entries.forEach(entry => map.set(`${entry.date}|${entry.createdAt}|${entry.desc}|${entry.receipt}`, normalizeEntry(entry)));
-    return Array.from(map.values());
-  }
-
   function renderDashboard(){
     const month = currentMonth();
     const monthEntries = entriesForMonth(month);
@@ -556,6 +607,7 @@
     const pieChart = document.getElementById('pieChart');
     const barChart = document.getElementById('barChart');
     const pieLegend = document.getElementById('pieLegend');
+    const weekChips = document.getElementById('weekChips');
     if (!pieChart || !barChart) return;
 
     document.querySelectorAll('.dash-toggle').forEach(btn => {
@@ -563,29 +615,36 @@
     });
 
     if (dashboardView === 'week') {
-      const today = new Date();
-      const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
-      const startIso = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`;
-      const endIso = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
-      const weekEntries = allSavedEntries().filter(entry => entry.date >= startIso && entry.date <= endIso);
+      const maxWeek = weekCountForMonth(month);
+      if (!dashboardWeek || dashboardWeek > maxWeek) {
+        dashboardWeek = preferredWeekOfMonth(month, monthEntries);
+      }
+      dashboardWeek = Math.min(Math.max(1, dashboardWeek), maxWeek);
+      const range = weekRangeInMonth(month, dashboardWeek);
+      const weekEntries = monthEntries.filter(entry => weekOfMonth(entry.date) === dashboardWeek);
       const totals = summarizeEntries(weekEntries);
-      const dayBars = Array.from({ length: 7 }, (_, index) => {
-        const day = new Date(start);
-        day.setDate(start.getDate() + index);
-        const iso = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+      const dayBars = [];
+      for (let day = range.startDay; day <= range.endDay; day++) {
+        const iso = `${month}-${String(day).padStart(2, '0')}`;
         const dayTotals = summarizeEntries(weekEntries.filter(entry => entry.date === iso));
-        return {
-          label: day.toLocaleDateString('en-GB', { weekday: 'short' }),
+        dayBars.push({
+          label: String(day),
           received: dayTotals.received,
           disbursed: dayTotals.disbursed
-        };
-      });
-      if (scope) scope.textContent = `This week (${formatDate(startIso)} – ${formatDate(endIso)})`;
-      if (pieTitle) pieTitle.textContent = 'This week: received vs disbursed';
-      if (barTitle) barTitle.textContent = 'Daily activity this week';
+        });
+      }
+      if (weekChips) {
+        weekChips.hidden = false;
+        weekChips.innerHTML = Array.from({ length: maxWeek }, (_, index) => {
+          const week = index + 1;
+          const count = monthEntries.filter(entry => weekOfMonth(entry.date) === week).length;
+          const active = week === dashboardWeek ? ' active' : '';
+          return `<button type="button" class="week-chip${active}" data-week="${week}">W${week}${count ? ` · ${count}` : ''}</button>`;
+        }).join('');
+      }
+      if (scope) scope.textContent = `Week ${dashboardWeek} of ${monthLabelText(month)} (${formatDate(range.startIso)} – ${formatDate(range.endIso)})`;
+      if (pieTitle) pieTitle.textContent = `Week ${dashboardWeek}: received vs disbursed`;
+      if (barTitle) barTitle.textContent = `Daily totals by date (W${dashboardWeek})`;
       document.getElementById('dashReceived').textContent = nairaFmt(totals.received);
       document.getElementById('dashDisbursed').textContent = nairaFmt(totals.disbursed);
       const net = totals.received - totals.disbursed;
@@ -599,20 +658,28 @@
       ]);
       pieLegend.innerHTML = `
         <span><i class="swatch" style="background:#1c7a4d"></i>Received ${nairaFmt(totals.received)}</span>
-        <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>`;
+        <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>
+        <span><i class="swatch" style="background:#1c7a4d"></i>Bar: received</span>
+        <span><i class="swatch" style="background:#a3372c"></i>Bar: disbursed</span>`;
       renderBarChart(barChart, dayBars);
-      renderVehicleBreakdown(weekEntries, 'This week');
+      renderVehicleBreakdown(weekEntries, `Week ${dashboardWeek}`);
       return;
     }
 
+    if (weekChips) {
+      weekChips.hidden = true;
+      weekChips.innerHTML = '';
+    }
+
     const totals = summarizeEntries(monthEntries);
-    const weekBars = [1, 2, 3, 4, 5].map(week => {
+    const weekBars = Array.from({ length: weekCountForMonth(month) }, (_, index) => {
+      const week = index + 1;
       const weekTotals = summarizeEntries(monthEntries.filter(entry => weekOfMonth(entry.date) === week));
       return { label: `W${week}`, received: weekTotals.received, disbursed: weekTotals.disbursed };
     });
     if (scope) scope.textContent = `Monthly overview for ${monthLabelText(month)}`;
     if (pieTitle) pieTitle.textContent = 'This month: received vs disbursed';
-    if (barTitle) barTitle.textContent = 'Weekly received & disbursed';
+    if (barTitle) barTitle.textContent = 'Weekly received & disbursed (by date groups)';
     document.getElementById('dashReceived').textContent = nairaFmt(totals.received);
     document.getElementById('dashDisbursed').textContent = nairaFmt(totals.disbursed);
     const net = totals.received - totals.disbursed;
@@ -1031,7 +1098,6 @@
       if (!entry.date && entry.received === 0 && entry.disbursed === 0 && !entry.desc) continue;
       if (!entry.date && entry.received === 0 && entry.disbursed === 0) continue;
       if (entry.received === 0 && entry.disbursed === 0) continue;
-      if (!entry.date) entry.date = new Date().toISOString().slice(0, 10);
       imported.push(entry);
     }
     return { imported, opening };
@@ -1245,14 +1311,20 @@
   function probeSheet(sheet){
     try {
       const result = entriesFromMatrix(sheet.matrix);
+      const sheetMonth = monthFromSheetName(sheet.name);
+      const fallbackDate = `${sheetMonth || activeMonth}-01`;
+      result.imported.forEach(entry => {
+        if (!entry.date) entry.date = fallbackDate;
+      });
       return {
         name: sheet.name,
+        sheetMonth,
         imported: result.imported,
         opening: result.opening,
         usable: result.imported.length > 0
       };
     } catch (_) {
-      return { name: sheet.name, imported: [], opening: null, usable: false };
+      return { name: sheet.name, sheetMonth: monthFromSheetName(sheet.name), imported: [], opening: null, usable: false };
     }
   }
 
@@ -1326,18 +1398,49 @@
       : meta.sheetName
         ? ` from “${meta.sheetName}”`
         : '';
-    if (entries.length) {
-      if (!window.confirm(`Found ${imported.length} transaction${imported.length === 1 ? '' : 's'}${sheetNote}. Add them to your current records?\n\nTip: clear this month first if you want only the imported records.`)) return;
-      entries = entries.concat(imported);
-    } else {
-      entries = imported;
+
+    const byMonth = {};
+    imported.forEach((raw, index) => {
+      const entry = normalizeEntry({ ...raw, createdAt: Date.now() + index });
+      if (!entry.date) entry.date = `${meta.fallbackMonth || activeMonth}-01`;
+      const month = monthFromDate(entry.date, meta.fallbackMonth || activeMonth);
+      if (!byMonth[month]) byMonth[month] = [];
+      byMonth[month].push(entry);
+    });
+    const months = Object.keys(byMonth).sort();
+    const monthNote = months.length > 1
+      ? `\n\nThey will be filed by date into: ${months.map(monthLabelText).join(', ')}.`
+      : '';
+
+    if (months.some(month => (month === activeMonth ? entries.length : (monthlyLedgers[month]?.entries?.length || 0)))) {
+      if (!window.confirm(`Found ${imported.length} transaction${imported.length === 1 ? '' : 's'}${sheetNote}.${monthNote}\n\nAdd them to your existing records?\n\nTip: clear a month first if you want only the imported records for that month.`)) return;
     }
-    if (opening != null && Number.isFinite(opening)) {
-      openingBalanceInput.value = String(Math.max(0, opening));
-    }
-    saveEntries();
-    resetForm();
-    showStatus(`${imported.length} transaction${imported.length === 1 ? '' : 's'} imported${sheetNote}.`);
+
+    saveMonth(activeMonth);
+    months.forEach(month => {
+      if (!monthlyLedgers[month]) monthlyLedgers[month] = emptyLedger();
+      const existing = month === activeMonth
+        ? entries.map(normalizeEntry)
+        : (monthlyLedgers[month].entries || []).map(normalizeEntry);
+      const merged = existing.concat(byMonth[month]);
+      merged.sort((a, b) => a.date.localeCompare(b.date) || a.createdAt - b.createdAt);
+      monthlyLedgers[month] = {
+        ...monthlyLedgers[month],
+        entries: merged
+      };
+      if (opening != null && Number.isFinite(opening) && month === months[0]) {
+        monthlyLedgers[month].openingBalance = Math.max(0, opening);
+      }
+    });
+    localStorage.setItem(MONTHLY_STORAGE_KEY, JSON.stringify(monthlyLedgers));
+
+    const primary = months.slice().sort((a, b) => byMonth[b].length - byMonth[a].length)[0];
+    activeMonth = primary;
+    reportMonthInput.value = primary;
+    localStorage.setItem(SELECTED_MONTH_KEY, primary);
+    loadMonth(primary);
+    dashboardWeek = preferredWeekOfMonth(primary, entriesForMonth(primary));
+    showStatus(`${imported.length} transaction${imported.length === 1 ? '' : 's'} imported${sheetNote}${months.length > 1 ? ` across ${months.length} months` : ''}.`);
   }
 
   document.getElementById('importExcelBtn').addEventListener('click', () => document.getElementById('importExcelInput').click());
@@ -1371,9 +1474,11 @@
       }
       const imported = selected.flatMap(sheet => sheet.imported);
       const opening = selected.map(sheet => sheet.opening).find(value => value != null && Number.isFinite(value));
+      const fallbackMonth = selected.map(sheet => sheet.sheetMonth).find(Boolean) || activeMonth;
       applyImportedEntries(imported, opening, {
         sheetCount: selected.length,
-        sheetName: selected.length === 1 ? selected[0].name : ''
+        sheetName: selected.length === 1 ? selected[0].name : '',
+        fallbackMonth
       });
     } catch (_) {
       showStatus('Could not read that spreadsheet. Try a multi-sheet .xlsx, .xls, CSV, or FuelLedger Excel export.', true);
