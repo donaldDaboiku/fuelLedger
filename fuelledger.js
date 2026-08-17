@@ -455,6 +455,82 @@
     </svg>`;
   }
 
+  const VEHICLE_COLORS = ['#0f5b78', '#1c7a4d', '#a3372c', '#c47a1d', '#5b4b8a', '#2a7f8f', '#8a4b2a', '#4a6fa5', '#6b7c3b', '#7a3f6d'];
+
+  function vehicleBreakdown(list){
+    const map = new Map();
+    list.forEach(entry => {
+      const key = (entry.vehicle || '').trim() || 'Unassigned';
+      const current = map.get(key) || { vehicle: key, received: 0, disbursed: 0, count: 0 };
+      current.received += entry.received;
+      current.disbursed += entry.disbursed;
+      current.count += 1;
+      map.set(key, current);
+    });
+    return Array.from(map.values()).sort((a, b) => b.disbursed - a.disbursed || b.received - a.received || a.vehicle.localeCompare(b.vehicle));
+  }
+
+  function renderVehicleBarChart(target, rows){
+    if (!rows.length) {
+      target.innerHTML = '<div class="chart-empty">No vehicle amounts yet</div>';
+      return;
+    }
+    const maxValue = Math.max(...rows.map(row => row.disbursed), 0);
+    if (!maxValue) {
+      target.innerHTML = '<div class="chart-empty">No vehicle disbursements yet</div>';
+      return;
+    }
+    const rowHeight = 28;
+    const padL = 108;
+    const padR = 64;
+    const padT = 8;
+    const width = 520;
+    const height = padT + rows.length * rowHeight + 8;
+    const chartW = width - padL - padR;
+    const bars = rows.map((row, index) => {
+      const y = padT + index * rowHeight;
+      const barW = Math.max(2, (row.disbursed / maxValue) * chartW);
+      const label = row.vehicle.length > 14 ? `${row.vehicle.slice(0, 13)}…` : row.vehicle;
+      return `
+        <g>
+          <text x="${padL - 8}" y="${y + 14}" text-anchor="end" font-size="11" fill="#5b6b7a">${escapeHtml(label)}</text>
+          <rect x="${padL}" y="${y + 4}" width="${barW}" height="16" fill="${row.color}" rx="3"></rect>
+          <text x="${padL + barW + 6}" y="${y + 15}" font-size="10" fill="#1c2b3a">${escapeHtml(nairaFmt(row.disbursed))}</text>
+        </g>`;
+    }).join('');
+    target.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Vehicle disbursement bar chart">${bars}</svg>`;
+  }
+
+  function renderVehicleBreakdown(list, title){
+    const vehicleTitle = document.getElementById('vehicleChartTitle');
+    const vehiclePie = document.getElementById('vehiclePieChart');
+    const vehicleBar = document.getElementById('vehicleBarChart');
+    const vehicleLegend = document.getElementById('vehicleLegend');
+    if (!vehiclePie || !vehicleBar || !vehicleLegend) return;
+    if (vehicleTitle) vehicleTitle.textContent = title;
+
+    const rows = vehicleBreakdown(list).map((row, index) => ({
+      ...row,
+      color: VEHICLE_COLORS[index % VEHICLE_COLORS.length]
+    }));
+    const pieSlices = rows
+      .filter(row => row.disbursed > 0)
+      .map(row => ({ label: row.vehicle, value: row.disbursed, color: row.color }));
+
+    if (!pieSlices.length) {
+      vehiclePie.innerHTML = '<div class="chart-empty">No vehicle disbursements yet</div>';
+      vehicleBar.innerHTML = '<div class="chart-empty">Add vehicle numbers on transactions to see this breakdown</div>';
+      vehicleLegend.innerHTML = '';
+      return;
+    }
+
+    renderPieChart(vehiclePie, pieSlices);
+    renderVehicleBarChart(vehicleBar, rows.filter(row => row.disbursed > 0));
+    vehicleLegend.innerHTML = rows.filter(row => row.disbursed > 0).map(row =>
+      `<span><i class="swatch" style="background:${row.color}"></i>${escapeHtml(row.vehicle)} ${nairaFmt(row.disbursed)} (${row.count})</span>`
+    ).join('');
+  }
+
   function allSavedEntries(){
     const map = new Map();
     Object.keys(monthlyLedgers).forEach(month => {
@@ -519,6 +595,7 @@
         <span><i class="swatch" style="background:#1c7a4d"></i>Received ${nairaFmt(totals.received)}</span>
         <span><i class="swatch" style="background:#a3372c"></i>Disbursed ${nairaFmt(totals.disbursed)}</span>`;
       renderBarChart(barChart, dayBars);
+      renderVehicleBreakdown(weekEntries, 'This week: disbursement by vehicle');
       return;
     }
 
@@ -547,6 +624,7 @@
       <span><i class="swatch" style="background:#1c7a4d"></i>Bar: received</span>
       <span><i class="swatch" style="background:#a3372c"></i>Bar: disbursed</span>`;
     renderBarChart(barChart, weekBars);
+    renderVehicleBreakdown(monthEntries, `Disbursement by vehicle · ${monthLabelText(month)}`);
   }
 
   function renderList(){
